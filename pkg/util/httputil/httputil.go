@@ -27,9 +27,9 @@ type (
 // DefaultServerConfig is the default server config
 var DefaultServerConfig = serverConfig{
 	ReadHeaderTimeout: 5 * time.Second,
-	ReadTimeout:       30 * time.Second,
-	WriteTimeout:      30 * time.Second,
-	IdleTimeout:       120 * time.Second,
+	ReadTimeout:       300 * time.Second,
+	WriteTimeout:      300 * time.Second,
+	IdleTimeout:       300 * time.Second,
 }
 
 // ReadHeaderTimeout sets header timeout
