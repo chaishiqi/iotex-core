@@ -143,7 +143,7 @@ func ping(ctx context.Context, ws *safeWebsocketConn, cancel context.CancelFunc)
 	defer func() {
 		pingTicker.Stop()
 		if err := ws.Close(); err != nil {
-			log.Logger("api").Warn("fail to close websocket connection.", zap.Error(err))
+			// log.Logger("api").Warn("fail to close websocket connection.", zap.Error(err))
 		}
 	}()
 
