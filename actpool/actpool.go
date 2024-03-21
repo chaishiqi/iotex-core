@@ -33,7 +33,7 @@ import (
 
 const (
 	// TODO: move to config
-	_numWorker = 1
+	_numWorker = 16
 )
 
 var (
