@@ -91,7 +91,7 @@ func (worker *queueWorker) Handle(job workerJob) error {
 		replace         = job.rep
 	)
 	defer span.End()
-
+	log.L().Warn("queueWorker handle action start", log.Hex("action", actHash[:]))
 	nonce, balance, err := worker.getConfirmedState(ctx, act.SenderAddress())
 	if err != nil {
 		return err
@@ -103,7 +103,7 @@ func (worker *queueWorker) Handle(job workerJob) error {
 	if err := worker.putAction(sender, act, nonce, balance); err != nil {
 		return err
 	}
-
+	log.L().Warn("queueWorker handle action putAction", log.Hex("action", actHash[:]))
 	worker.ap.allActions.Set(actHash, act)
 
 	if desAddress, ok := act.Destination(); ok && !strings.EqualFold(sender, desAddress) {
@@ -113,7 +113,7 @@ func (worker *queueWorker) Handle(job workerJob) error {
 	}
 
 	atomic.AddUint64(&worker.ap.gasInPool, intrinsicGas)
-
+	log.L().Warn("queueWorker handle action replace", log.Hex("action", actHash[:]))
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
 	if replace {
@@ -129,9 +129,9 @@ func (worker *queueWorker) Handle(job workerJob) error {
 			_actpoolMtc.WithLabelValues("overMaxNumActsPerPool").Inc()
 		}
 	}
-
+	log.L().Warn("queueWorker handle action removeEmptyAccounts", log.Hex("action", actHash[:]))
 	worker.removeEmptyAccounts()
-
+	log.L().Warn("queueWorker handle action end", log.Hex("action", actHash[:]))
 	return err
 }
 
