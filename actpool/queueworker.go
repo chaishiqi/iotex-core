@@ -63,6 +63,7 @@ func (worker *queueWorker) Start() error {
 		for {
 			job, more := <-worker.queue
 			if !more { // worker chan is closed
+				log.L().Warn("worker existed", zap.Int("workerID", worker.id))
 				return
 			}
 			job.err <- worker.Handle(job)
@@ -72,6 +73,7 @@ func (worker *queueWorker) Start() error {
 }
 
 func (worker *queueWorker) Stop() error {
+	log.L().Warn("worker stop", zap.Int("workerID", worker.id))
 	close(worker.queue)
 	return nil
 }
@@ -93,8 +95,9 @@ func (worker *queueWorker) Handle(job workerJob) error {
 		replace         = job.rep
 	)
 	defer span.End()
-	log.L().Warn("queueWorker handle action start", log.Hex("action", actHash[:]), zap.Int("workerID", worker.id))
-	defer log.L().Warn("queueWorker handle action end", log.Hex("action", actHash[:]))
+	logWith := log.L().With(log.Hex("action", actHash[:]), zap.Int("workerID", worker.id))
+	logWith.Warn("queueWorker handle action start")
+	defer logWith.Warn("queueWorker handle action end")
 	nonce, balance, err := worker.getConfirmedState(ctx, act.SenderAddress())
 	if err != nil {
 		return err
@@ -106,24 +109,24 @@ func (worker *queueWorker) Handle(job workerJob) error {
 	if err := worker.putAction(sender, act, nonce, balance); err != nil {
 		return err
 	}
-	log.L().Warn("queueWorker handle action putAction", log.Hex("action", actHash[:]))
+	logWith.Warn("queueWorker handle action putAction")
 	worker.ap.allActions.Set(actHash, act)
 
 	if desAddress, ok := act.Destination(); ok && !strings.EqualFold(sender, desAddress) {
 		if err := worker.ap.accountDesActs.addAction(act); err != nil {
-			log.L().Debug("fail to add destionation map", zap.Error(err))
+			logWith.Warn("fail to add destionation map", zap.Error(err))
 		}
 	}
 
 	atomic.AddUint64(&worker.ap.gasInPool, intrinsicGas)
-	log.L().Warn("queueWorker handle action replace", log.Hex("action", actHash[:]))
+	logWith.Warn("queueWorker handle action replace")
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
 	if replace {
 		// TODO: early return if sender is the account to pop and nonce is larger than largest in the queue
 		actToReplace := worker.accountActs.PopPeek()
 		if actToReplace == nil {
-			log.L().Warn("UNEXPECTED ERROR: action pool is full, but no action to drop")
+			logWith.Warn("UNEXPECTED ERROR: action pool is full, but no action to drop")
 			return nil
 		}
 		worker.ap.removeInvalidActs([]*action.SealedEnvelope{actToReplace})
@@ -132,7 +135,7 @@ func (worker *queueWorker) Handle(job workerJob) error {
 			_actpoolMtc.WithLabelValues("overMaxNumActsPerPool").Inc()
 		}
 	}
-	log.L().Warn("queueWorker handle action removeEmptyAccounts", log.Hex("action", actHash[:]))
+	logWith.Warn("queueWorker handle action removeEmptyAccounts")
 	worker.removeEmptyAccounts()
 
 	return err
