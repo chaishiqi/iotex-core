@@ -220,7 +220,8 @@ func (ap *actPool) Add(ctx context.Context, act *action.SealedEnvelope) error {
 	ctx, span := tracer.NewSpan(ap.context(ctx), "actPool.Add")
 	defer span.End()
 	ctx = ap.context(ctx)
-
+	actHash, _ := act.Hash()
+	log.L().Warn("Add action to actpool", log.Hex("action", actHash[:]))
 	// system action is only added by proposer when creating a block
 	if action.IsSystemAction(act) {
 		return action.ErrInvalidAct
@@ -242,7 +243,7 @@ func (ap *actPool) Add(ctx context.Context, act *action.SealedEnvelope) error {
 		_actpoolMtc.WithLabelValues("overMaxGasLimitPerPool").Inc()
 		return ErrGasTooHigh
 	}
-
+	log.L().Warn("Add action to actpool queue", log.Hex("action", actHash[:]))
 	return ap.enqueue(
 		ctx,
 		act,
@@ -437,13 +438,16 @@ func (ap *actPool) context(ctx context.Context) context.Context {
 
 func (ap *actPool) enqueue(ctx context.Context, act *action.SealedEnvelope, replace bool) error {
 	var errChan = make(chan error) // unused errChan will be garbage-collected
+	actHash, _ := act.Hash()
+	log.L().Warn("actpool enqueue start", log.Hex("action", actHash[:]))
+	defer log.L().Warn("actpool enqueue end", log.Hex("action", actHash[:]))
 	ap.jobQueue[ap.allocatedWorker(act.SenderAddress())] <- workerJob{
 		ctx,
 		act,
 		replace,
 		errChan,
 	}
-
+	log.L().Warn("actpool enqueue for", log.Hex("action", actHash[:]))
 	for {
 		select {
 		case <-ctx.Done():
