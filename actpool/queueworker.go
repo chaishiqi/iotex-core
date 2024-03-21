@@ -23,6 +23,7 @@ import (
 
 type (
 	queueWorker struct {
+		id            int
 		queue         chan workerJob
 		ap            *actPool
 		mu            sync.RWMutex
@@ -43,9 +44,10 @@ type (
 	}
 )
 
-func newQueueWorker(ap *actPool, jobQueue chan workerJob) *queueWorker {
+func newQueueWorker(id int, ap *actPool, jobQueue chan workerJob) *queueWorker {
 	acc, _ := ttl.NewCache()
 	return &queueWorker{
+		id:            id,
 		queue:         jobQueue,
 		ap:            ap,
 		accountActs:   newAccountPool(),
@@ -91,7 +93,7 @@ func (worker *queueWorker) Handle(job workerJob) error {
 		replace         = job.rep
 	)
 	defer span.End()
-	log.L().Warn("queueWorker handle action start", log.Hex("action", actHash[:]))
+	log.L().Warn("queueWorker handle action start", log.Hex("action", actHash[:]), zap.Int("workerID", worker.id))
 	defer log.L().Warn("queueWorker handle action end", log.Hex("action", actHash[:]))
 	nonce, balance, err := worker.getConfirmedState(ctx, act.SenderAddress())
 	if err != nil {
