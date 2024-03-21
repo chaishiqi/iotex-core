@@ -92,6 +92,7 @@ func (worker *queueWorker) Handle(job workerJob) error {
 	)
 	defer span.End()
 	log.L().Warn("queueWorker handle action start", log.Hex("action", actHash[:]))
+	defer log.L().Warn("queueWorker handle action end", log.Hex("action", actHash[:]))
 	nonce, balance, err := worker.getConfirmedState(ctx, act.SenderAddress())
 	if err != nil {
 		return err
@@ -131,7 +132,7 @@ func (worker *queueWorker) Handle(job workerJob) error {
 	}
 	log.L().Warn("queueWorker handle action removeEmptyAccounts", log.Hex("action", actHash[:]))
 	worker.removeEmptyAccounts()
-	log.L().Warn("queueWorker handle action end", log.Hex("action", actHash[:]))
+
 	return err
 }
 

@@ -439,9 +439,10 @@ func (ap *actPool) context(ctx context.Context) context.Context {
 func (ap *actPool) enqueue(ctx context.Context, act *action.SealedEnvelope, replace bool) error {
 	var errChan = make(chan error) // unused errChan will be garbage-collected
 	actHash, _ := act.Hash()
-	log.L().Warn("actpool enqueue start", log.Hex("action", actHash[:]))
-	defer log.L().Warn("actpool enqueue end", log.Hex("action", actHash[:]))
-	ap.jobQueue[ap.allocatedWorker(act.SenderAddress())] <- workerJob{
+	workerID := ap.allocatedWorker(act.SenderAddress())
+	log.L().Warn("actpool enqueue start", log.Hex("action", actHash[:]), zap.Int("workerID", workerID))
+	defer log.L().Warn("actpool enqueue end", log.Hex("action", actHash[:]), zap.Int("workerID", workerID))
+	ap.jobQueue[workerID] <- workerJob{
 		ctx,
 		act,
 		replace,
