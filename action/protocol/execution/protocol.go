@@ -1,4 +1,4 @@
-// Copyright (c) 2019 IoTeX Foundation
+// Copyright (c) 2024 IoTeX Foundation
 // This source code is provided 'as is' and no warranties are given as to title or non-infringement, merchantability
 // or fitness for purpose and, to the extent permitted by law, all liability for your use of the code is disclaimed.
 // This source code is governed by Apache License 2.0 that can be found in the LICENSE file.
@@ -13,10 +13,10 @@ import (
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/execution/evm"
-	"github.com/iotexproject/iotex-core/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/execution/evm"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
 )
 
 const (
@@ -29,21 +29,19 @@ const (
 
 // Protocol defines the protocol of handling executions
 type Protocol struct {
-	getBlockHash evm.GetBlockHash
-	getBlockTime evm.GetBlockTime
-	depositGas   evm.DepositGasWithSGD
-	addr         address.Address
-	sgdRegistry  evm.SGDRegistry
+	depositGas protocol.DepositGas
+	addr       address.Address
 }
 
 // NewProtocol instantiates the protocol of exeuction
-func NewProtocol(getBlockHash evm.GetBlockHash, depositGasWithSGD evm.DepositGasWithSGD, sgd evm.SGDRegistry, getBlockTime evm.GetBlockTime) *Protocol {
+// TODO: remove unused getBlockHash and getBlockTime
+func NewProtocol(_ evm.GetBlockHash, depositGas protocol.DepositGas, _ evm.GetBlockTime) *Protocol {
 	h := hash.Hash160b([]byte(_protocolID))
 	addr, err := address.FromBytes(h[:])
 	if err != nil {
 		log.L().Panic("Error when constructing the address of vote protocol", zap.Error(err))
 	}
-	return &Protocol{getBlockHash: getBlockHash, depositGas: depositGasWithSGD, addr: addr, sgdRegistry: sgd, getBlockTime: getBlockTime}
+	return &Protocol{depositGas: depositGas, addr: addr}
 }
 
 // FindProtocol finds the registered protocol from registry
@@ -63,29 +61,27 @@ func FindProtocol(registry *protocol.Registry) *Protocol {
 }
 
 // Handle handles an execution
-func (p *Protocol) Handle(ctx context.Context, act action.Action, sm protocol.StateManager) (*action.Receipt, error) {
-	exec, ok := act.(*action.Execution)
-	if !ok {
+func (p *Protocol) Handle(ctx context.Context, elp action.Envelope, sm protocol.StateManager) (*action.Receipt, error) {
+	if _, ok := elp.Action().(*action.Execution); !ok {
 		return nil, nil
 	}
+	bcCtx := protocol.MustGetBlockchainCtx(ctx)
 	ctx = evm.WithHelperCtx(ctx, evm.HelperContext{
-		GetBlockHash:   p.getBlockHash,
-		GetBlockTime:   p.getBlockTime,
+		GetBlockHash:   bcCtx.GetBlockHash,
+		GetBlockTime:   bcCtx.GetBlockTime,
 		DepositGasFunc: p.depositGas,
-		Sgd:            p.sgdRegistry,
 	})
-	_, receipt, err := evm.ExecuteContract(ctx, sm, exec)
+	_, receipt, err := evm.ExecuteContract(ctx, sm, elp)
 
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to execute contract")
 	}
-
 	return receipt, nil
 }
 
 // Validate validates an execution
-func (p *Protocol) Validate(ctx context.Context, act action.Action, _ protocol.StateReader) error {
-	exec, ok := act.(*action.Execution)
+func (p *Protocol) Validate(ctx context.Context, elp action.Envelope, _ protocol.StateReader) error {
+	exec, ok := elp.Action().(*action.Execution)
 	if !ok {
 		return nil
 	}
@@ -96,12 +92,15 @@ func (p *Protocol) Validate(ctx context.Context, act action.Action, _ protocol.S
 	fCtx := protocol.MustGetFeatureCtx(ctx)
 	if fCtx.ExecutionSizeLimit32KB {
 		sizeLimit = _executionSizeLimit32KB
-		dataSize = exec.TotalSize()
+		dataSize = elp.Size()
 	}
 
 	// Reject oversize execution
 	if dataSize > sizeLimit {
 		return action.ErrOversizedData
+	}
+	if len(elp.BlobHashes()) > 0 && elp.To() == nil {
+		return errors.New("cannot create contract in blob tx")
 	}
 	return nil
 }

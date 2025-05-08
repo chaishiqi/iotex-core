@@ -6,8 +6,10 @@
 package api
 
 import (
-	"github.com/iotexproject/iotex-core/gasstation"
-	"github.com/iotexproject/iotex-core/pkg/tracer"
+	"time"
+
+	"github.com/iotexproject/iotex-core/v2/gasstation"
+	"github.com/iotexproject/iotex-core/v2/pkg/tracer"
 )
 
 // Config is the api service config
@@ -23,16 +25,25 @@ type Config struct {
 	Tracer          tracer.Config     `yaml:"tracer"`
 	// BatchRequestLimit is the maximum number of requests in a batch.
 	BatchRequestLimit int `yaml:"batchRequestLimit"`
+	// WebsocketRateLimit is the maximum number of messages per second per client.
+	WebsocketRateLimit int `yaml:"websocketRateLimit"`
+	// ListenerLimit is the maximum number of listeners.
+	ListenerLimit int `yaml:"listenerLimit"`
+	// ReadyDuration is the duration to wait for the server to be ready.
+	ReadyDuration time.Duration `yaml:"readyDuration"`
 }
 
 // DefaultConfig is the default config
 var DefaultConfig = Config{
-	UseRDS:            false,
-	GRPCPort:          14014,
-	HTTPPort:          15014,
-	WebSocketPort:     16014,
-	TpsWindow:         10,
-	GasStation:        gasstation.DefaultConfig,
-	RangeQueryLimit:   1000,
-	BatchRequestLimit: _defaultBatchRequestLimit,
+	UseRDS:             false,
+	GRPCPort:           14014,
+	HTTPPort:           15014,
+	WebSocketPort:      16014,
+	TpsWindow:          10,
+	GasStation:         gasstation.DefaultConfig,
+	RangeQueryLimit:    1000,
+	BatchRequestLimit:  _defaultBatchRequestLimit,
+	WebsocketRateLimit: 5,
+	ListenerLimit:      5000,
+	ReadyDuration:      time.Second * 30,
 }

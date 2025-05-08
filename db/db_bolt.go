@@ -8,6 +8,7 @@ package db
 import (
 	"bytes"
 	"context"
+	"sync"
 	"syscall"
 
 	"github.com/pkg/errors"
@@ -15,10 +16,10 @@ import (
 	bolt "go.etcd.io/bbolt"
 	"go.uber.org/zap"
 
-	"github.com/iotexproject/iotex-core/db/batch"
-	"github.com/iotexproject/iotex-core/pkg/lifecycle"
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/pkg/util/byteutil"
+	"github.com/iotexproject/iotex-core/v2/db/batch"
+	"github.com/iotexproject/iotex-core/v2/pkg/lifecycle"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/pkg/util/byteutil"
 )
 
 const _fileMode = 0600
@@ -43,6 +44,7 @@ type BoltDB struct {
 	db     *bolt.DB
 	path   string
 	config Config
+	mutex  sync.Mutex
 }
 
 // NewBoltDB instantiates an BoltDB with implements KVStore
@@ -56,6 +58,12 @@ func NewBoltDB(cfg Config) *BoltDB {
 
 // Start opens the BoltDB (creates new file if not existing yet)
 func (b *BoltDB) Start(_ context.Context) error {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	if b.IsReady() {
+		return nil
+	}
 	opts := *bolt.DefaultOptions
 	if b.config.ReadOnly {
 		opts.ReadOnly = true
@@ -70,6 +78,12 @@ func (b *BoltDB) Start(_ context.Context) error {
 
 // Stop closes the BoltDB
 func (b *BoltDB) Stop(_ context.Context) error {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	if !b.IsReady() {
+		return nil
+	}
 	if err := b.TurnOff(); err != nil {
 		return err
 	}

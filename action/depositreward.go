@@ -1,4 +1,4 @@
-// Copyright (c) 2019 IoTeX Foundation
+// Copyright (c) 2024 IoTeX Foundation
 // This source code is provided 'as is' and no warranties are given as to title or non-infringement, merchantability
 // or fitness for purpose and, to the extent permitted by law, all liability for your use of the code is disclaimed.
 // This source code is governed by Apache License 2.0 that can be found in the LICENSE file.
@@ -11,12 +11,11 @@ import (
 	"strings"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
-	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 	"github.com/pkg/errors"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/iotexproject/iotex-core/pkg/util/byteutil"
-	"github.com/iotexproject/iotex-proto/golang/iotextypes"
+	"github.com/iotexproject/iotex-core/v2/pkg/util/byteutil"
 )
 
 const _depositRewardInterfaceABI = `[
@@ -48,6 +47,7 @@ var (
 
 	_depositRewardMethod abi.Method
 	_                    EthCompatibleAction = (*DepositToRewardingFund)(nil)
+	_                    amountForCost       = (*DepositToRewardingFund)(nil)
 )
 
 func init() {
@@ -64,10 +64,16 @@ func init() {
 
 // DepositToRewardingFund is the action to deposit to the rewarding fund
 type DepositToRewardingFund struct {
-	AbstractAction
-
+	reward_common
 	amount *big.Int
 	data   []byte
+}
+
+func NewDepositToRewardingFund(amount *big.Int, data []byte) *DepositToRewardingFund {
+	return &DepositToRewardingFund{
+		amount: amount,
+		data:   data,
+	}
 }
 
 // Amount returns the amount to deposit
@@ -79,6 +85,10 @@ func (d *DepositToRewardingFund) Data() []byte { return d.data }
 // Serialize returns a raw byte stream of a deposit action
 func (d *DepositToRewardingFund) Serialize() []byte {
 	return byteutil.Must(proto.Marshal(d.Proto()))
+}
+
+func (act *DepositToRewardingFund) FillAction(core *iotextypes.ActionCore) {
+	core.Action = &iotextypes.ActionCore_DepositToRewardingFund{DepositToRewardingFund: act.Proto()}
 }
 
 // Proto converts a deposit action struct to a deposit action protobuf
@@ -107,71 +117,21 @@ func (d *DepositToRewardingFund) IntrinsicGas() (uint64, error) {
 	return CalculateIntrinsicGas(DepositToRewardingFundBaseGas, DepositToRewardingFundGasPerByte, dataLen)
 }
 
-// Cost returns the total cost of a deposit action
-func (d *DepositToRewardingFund) Cost() (*big.Int, error) {
-	intrinsicGas, err := d.IntrinsicGas()
-	if err != nil {
-		return nil, errors.Wrap(err, "error when getting intrinsic gas for the deposit action")
-	}
-	return big.NewInt(0).Mul(d.GasPrice(), big.NewInt(0).SetUint64(intrinsicGas)), nil
-}
-
 // SanityCheck validates the variables in the action
 func (d *DepositToRewardingFund) SanityCheck() error {
 	if d.Amount().Sign() < 0 {
 		return ErrNegativeValue
 	}
-
-	return d.AbstractAction.SanityCheck()
+	return nil
 }
 
-// DepositToRewardingFundBuilder is the struct to build DepositToRewardingFund
-type DepositToRewardingFundBuilder struct {
-	Builder
-	deposit DepositToRewardingFund
-}
-
-// SetAmount sets the amount to deposit
-func (b *DepositToRewardingFundBuilder) SetAmount(amount *big.Int) *DepositToRewardingFundBuilder {
-	b.deposit.amount = amount
-	return b
-}
-
-// SetData sets the additional data
-func (b *DepositToRewardingFundBuilder) SetData(data []byte) *DepositToRewardingFundBuilder {
-	b.deposit.data = data
-	return b
-}
-
-// Build builds a new deposit to rewarding fund action
-func (b *DepositToRewardingFundBuilder) Build() DepositToRewardingFund {
-	b.deposit.AbstractAction = b.Builder.Build()
-	return b.deposit
-}
-
-// encodeABIBinary encodes data in abi encoding
-func (d *DepositToRewardingFund) encodeABIBinary() ([]byte, error) {
+// EthData returns the ABI-encoded data for converting to eth tx
+func (d *DepositToRewardingFund) EthData() ([]byte, error) {
 	data, err := _depositRewardMethod.Inputs.Pack(d.Amount(), d.Data())
 	if err != nil {
 		return nil, err
 	}
 	return append(_depositRewardMethod.ID, data...), nil
-}
-
-// ToEthTx converts action to eth-compatible tx
-func (d *DepositToRewardingFund) ToEthTx(_ uint32) (*types.Transaction, error) {
-	data, err := d.encodeABIBinary()
-	if err != nil {
-		return nil, err
-	}
-	return types.NewTx(&types.LegacyTx{
-		Nonce:    d.Nonce(),
-		GasPrice: d.GasPrice(),
-		Gas:      d.GasLimit(),
-		To:       &_rewardingProtocolEthAddr,
-		Value:    big.NewInt(0),
-		Data:     data,
-	}), nil
 }
 
 // NewDepositToRewardingFundFromABIBinary decodes data into action

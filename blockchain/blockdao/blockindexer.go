@@ -1,4 +1,4 @@
-// Copyright (c) 2019 IoTeX Foundation
+// Copyright (c) 2024 IoTeX Foundation
 // This source code is provided 'as is' and no warranties are given as to title or non-infringement, merchantability
 // or fitness for purpose and, to the extent permitted by law, all liability for your use of the code is disclaimed.
 // This source code is governed by Apache License 2.0 that can be found in the LICENSE file.
@@ -12,10 +12,10 @@ import (
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
 )
 
 type (
@@ -25,7 +25,6 @@ type (
 		Stop(ctx context.Context) error
 		Height() (uint64, error)
 		PutBlock(context.Context, *block.Block) error
-		DeleteTipBlock(context.Context, *block.Block) error
 	}
 
 	// BlockIndexerWithStart defines an interface to accept block to build index from a start height
@@ -82,6 +81,10 @@ func (bic *BlockIndexerChecker) CheckIndexer(ctx context.Context, indexer BlockI
 		}
 	}
 	for i := startHeight; i <= targetHeight; i++ {
+		// ternimate if context is done
+		if err := ctx.Err(); err != nil {
+			return errors.Wrap(err, "terminate the indexer checking")
+		}
 		blk, err := bic.dao.GetBlockByHeight(i)
 		if err != nil {
 			return err
@@ -102,22 +105,28 @@ func (bic *BlockIndexerChecker) CheckIndexer(ctx context.Context, indexer BlockI
 		}
 		bcCtx.Tip.Height = tipBlk.Height()
 		if bcCtx.Tip.Height > 0 {
+			bcCtx.Tip.GasUsed = tipBlk.GasUsed()
 			bcCtx.Tip.Hash = tipBlk.HashHeader()
 			bcCtx.Tip.Timestamp = tipBlk.Timestamp()
+			bcCtx.Tip.BaseFee = tipBlk.BaseFee()
+			bcCtx.Tip.BlobGasUsed = tipBlk.BlobGasUsed()
+			bcCtx.Tip.ExcessBlobGas = tipBlk.ExcessBlobGas()
 		} else {
 			bcCtx.Tip.Hash = g.Hash()
 			bcCtx.Tip.Timestamp = time.Unix(g.Timestamp, 0)
 		}
 		for {
-			if err = indexer.PutBlock(protocol.WithBlockCtx(
+			if err = indexer.PutBlock(protocol.WithFeatureCtx(protocol.WithBlockCtx(
 				protocol.WithBlockchainCtx(ctx, bcCtx),
 				protocol.BlockCtx{
 					BlockHeight:    i,
 					BlockTimeStamp: blk.Timestamp(),
 					Producer:       producer,
 					GasLimit:       g.BlockGasLimitByHeight(i),
+					BaseFee:        blk.BaseFee(),
+					ExcessBlobGas:  blk.ExcessBlobGas(),
 				},
-			), blk); err == nil {
+			)), blk); err == nil {
 				break
 			}
 			if i < g.HawaiiBlockHeight && errors.Cause(err) == block.ErrDeltaStateMismatch {

@@ -16,16 +16,17 @@ import (
 	"github.com/iotexproject/go-pkgs/hash"
 	"github.com/iotexproject/iotex-election/test/mock/mock_committee"
 
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/blockchain"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/blockchain"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
 )
 
 func TestNewProtocol(t *testing.T) {
 	require := require.New(t)
 	ctrl := gomock.NewController(t)
 	committee := mock_committee.NewMockCommittee(ctrl)
-	g := genesis.Default
+	g := genesis.TestDefault()
+	g.EnableGravityChainVoting = true
 	g.ScoreThreshold = "1200000"
 	p, err := NewProtocol(
 		_rollDPoSScheme,

@@ -15,24 +15,24 @@ import (
 	"github.com/iotexproject/go-pkgs/crypto"
 	"github.com/pkg/errors"
 
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/account"
-	accountutil "github.com/iotexproject/iotex-core/action/protocol/account/util"
-	"github.com/iotexproject/iotex-core/action/protocol/poll"
-	"github.com/iotexproject/iotex-core/action/protocol/rewarding"
-	"github.com/iotexproject/iotex-core/action/protocol/rolldpos"
-	"github.com/iotexproject/iotex-core/actpool"
-	"github.com/iotexproject/iotex-core/blockchain"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/blockdao"
-	"github.com/iotexproject/iotex-core/blockchain/filedao"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/pkg/unit"
-	"github.com/iotexproject/iotex-core/state"
-	"github.com/iotexproject/iotex-core/state/factory"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/testutil"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/account"
+	accountutil "github.com/iotexproject/iotex-core/v2/action/protocol/account/util"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/poll"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rewarding"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rolldpos"
+	"github.com/iotexproject/iotex-core/v2/actpool"
+	"github.com/iotexproject/iotex-core/v2/blockchain"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/blockdao"
+	"github.com/iotexproject/iotex-core/v2/blockchain/filedao"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/pkg/unit"
+	"github.com/iotexproject/iotex-core/v2/state"
+	"github.com/iotexproject/iotex-core/v2/state/factory"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/testutil"
 )
 
 func TestUpdateRound(t *testing.T) {
@@ -157,7 +157,7 @@ func makeChain(t *testing.T) (blockchain.Blockchain, factory.Factory, actpool.Ac
 		testutil.CleanupPath(testIndexPath)
 	}()
 
-	g := genesis.Default
+	g := genesis.TestDefault()
 	g.Timestamp = 1562382372
 	sk, err := crypto.GenerateKey()
 	cfg.ProducerPrivKey = sk.HexString()
@@ -180,7 +180,7 @@ func makeChain(t *testing.T) (blockchain.Blockchain, factory.Factory, actpool.Ac
 	factoryCfg := factory.GenerateConfig(cfg, g)
 	db1, err := db.CreateKVStore(db.DefaultConfig, cfg.TrieDBPath)
 	require.NoError(err)
-	sf, err := factory.NewFactory(factoryCfg, db1, factory.RegistryOption(registry))
+	sf, err := factory.NewStateDB(factoryCfg, db1, factory.RegistryStateDBOption(registry))
 	require.NoError(err)
 	ap, err := actpool.NewActPool(g, sf, actpool.DefaultConfig)
 	require.NoError(err)
@@ -227,7 +227,7 @@ func makeChain(t *testing.T) (blockchain.Blockchain, factory.Factory, actpool.Ac
 
 func makeRoundCalculator(t *testing.T) *roundCalculator {
 	bc, sf, _, rp, pp := makeChain(t)
-	delegatesByEpoch := func(epochNum uint64) ([]string, error) {
+	delegatesByEpoch := func(epochNum uint64, _ []byte) ([]string, error) {
 		re := protocol.NewRegistry()
 		if err := rp.Register(re); err != nil {
 			return nil, err
@@ -242,7 +242,7 @@ func makeRoundCalculator(t *testing.T) *roundCalculator {
 					},
 				},
 			),
-			genesis.Default,
+			genesis.TestDefault(),
 		)
 		tipEpochNum := rp.GetEpochNum(tipHeight)
 		var candidatesList state.CandidateList
@@ -265,7 +265,7 @@ func makeRoundCalculator(t *testing.T) *roundCalculator {
 		return addrs, nil
 	}
 	return &roundCalculator{
-		NewChainManager(bc),
+		NewChainManager(bc, sf, &dummyBlockBuildFactory{}),
 		true,
 		rp,
 		delegatesByEpoch,

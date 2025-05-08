@@ -15,11 +15,11 @@ import (
 	"github.com/iotexproject/iotex-address/address"
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	accountutil "github.com/iotexproject/iotex-core/action/protocol/account/util"
-	"github.com/iotexproject/iotex-core/action/protocol/rewarding/rewardingpb"
-	"github.com/iotexproject/iotex-core/state"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	accountutil "github.com/iotexproject/iotex-core/v2/action/protocol/account/util"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rewarding/rewardingpb"
+	"github.com/iotexproject/iotex-core/v2/state"
 )
 
 // fund stores the balance of the rewarding fund. The difference between total and available balance should be
@@ -63,20 +63,14 @@ func (p *Protocol) Deposit(
 	sm protocol.StateManager,
 	amount *big.Int,
 	transactionLogType iotextypes.TransactionLogType,
-) (*action.TransactionLog, error) {
-	// fallback to regular case by setting sgdAmount = nil
-	return p.deposit(ctx, sm, nil, amount, nil, transactionLogType)
-}
-
-func (p *Protocol) deposit(
-	ctx context.Context,
-	sm protocol.StateManager,
-	receiver address.Address,
-	amount, sgdAmount *big.Int,
-	transactionLogType iotextypes.TransactionLogType,
-) (*action.TransactionLog, error) {
-	actionCtx := protocol.MustGetActionCtx(ctx)
-	accountCreationOpts := []state.AccountCreationOption{}
+) ([]*action.TransactionLog, error) {
+	if isZero(amount) {
+		return nil, nil
+	}
+	var (
+		actionCtx           = protocol.MustGetActionCtx(ctx)
+		accountCreationOpts = []state.AccountCreationOption{}
+	)
 	if protocol.MustGetFeatureCtx(ctx).CreateLegacyNonceAccount {
 		accountCreationOpts = append(accountCreationOpts, state.LegacyNonceAccountTypeOption())
 	}
@@ -92,31 +86,25 @@ func (p *Protocol) deposit(
 		return nil, err
 	}
 	// Add balance to fund
-	f := fund{}
-	if _, err := p.state(ctx, sm, _fundKey, &f); err != nil {
-		return nil, err
-	}
-	f.totalBalance.Add(f.totalBalance, amount)
-	f.unclaimedBalance.Add(f.unclaimedBalance, amount)
-	if !isZero(sgdAmount) {
-		f.unclaimedBalance.Sub(f.unclaimedBalance, sgdAmount)
-		if f.unclaimedBalance.Sign() == -1 {
-			return nil, errors.New("no enough available balance")
-		}
-		// grant sgd amount to receiver
-		if err := p.grantToAccount(ctx, sm, receiver, sgdAmount); err != nil {
-			return nil, err
-		}
-	}
-	if err := p.putState(ctx, sm, _fundKey, &f); err != nil {
-		return nil, err
-	}
-	return &action.TransactionLog{
+	var (
+		f    = fund{}
+		tLog = []*action.TransactionLog{}
+	)
+	tLog = append(tLog, &action.TransactionLog{
 		Type:      transactionLogType,
 		Sender:    actionCtx.Caller.String(),
 		Recipient: address.RewardingPoolAddr,
 		Amount:    amount,
-	}, nil
+	})
+	if _, err := p.state(ctx, sm, _fundKey, &f); err != nil {
+		return nil, err
+	}
+	f.totalBalance = big.NewInt(0).Add(f.totalBalance, amount)
+	f.unclaimedBalance = big.NewInt(0).Add(f.unclaimedBalance, amount)
+	if err := p.putState(ctx, sm, _fundKey, &f); err != nil {
+		return nil, err
+	}
+	return tLog, nil
 }
 
 // TotalBalance returns the total balance of the rewarding fund
@@ -146,11 +134,7 @@ func (p *Protocol) AvailableBalance(
 }
 
 // DepositGas deposits gas into the rewarding fund
-func DepositGas(ctx context.Context, sm protocol.StateManager, amount *big.Int) (*action.TransactionLog, error) {
-	// If the gas fee is 0, return immediately
-	if amount.Cmp(big.NewInt(0)) == 0 {
-		return nil, nil
-	}
+func DepositGas(ctx context.Context, sm protocol.StateManager, amount *big.Int, opts ...protocol.DepositOption) ([]*action.TransactionLog, error) {
 	// TODO: we bypass the gas deposit for the actions in genesis block. Later we should remove this after we remove
 	// genesis actions
 	blkCtx := protocol.MustGetBlockCtx(ctx)
@@ -165,35 +149,35 @@ func DepositGas(ctx context.Context, sm protocol.StateManager, amount *big.Int) 
 	if rp == nil {
 		return nil, nil
 	}
-	return rp.Deposit(ctx, sm, amount, iotextypes.TransactionLogType_GAS_FEE)
-}
-
-// DepositGasWithSGD deposits gas into the rewarding fund with Sharing of Gas-fee with DApps
-func DepositGasWithSGD(ctx context.Context, sm protocol.StateManager, sgdReceiver address.Address, totalAmount, sgdAmount *big.Int,
-) (*action.TransactionLog, error) {
-	if isZero(sgdAmount) {
-		// fallback to regular case if SGD amount is zero
-		return DepositGas(ctx, sm, totalAmount)
+	var (
+		logs []*action.TransactionLog
+		err  error
+	)
+	if !isZero(amount) {
+		logs, err = rp.Deposit(ctx, sm, amount, iotextypes.TransactionLogType_GAS_FEE)
+		if err != nil {
+			return nil, err
+		}
 	}
-	if sgdReceiver == nil {
-		// a valid SGD amount but no valid receiver address
-		return nil, errors.New("no valid receiver address to receive the Sharing of Gas-fee with DApps")
+	cfg := protocol.DepositOptionCfg{}
+	for _, opt := range opts {
+		opt(&cfg)
 	}
-	// TODO: we bypass the gas deposit for the actions in genesis block. Later we should remove this after we remove
-	// genesis actions
-	blkCtx := protocol.MustGetBlockCtx(ctx)
-	if blkCtx.BlockHeight == 0 {
-		return nil, nil
+	if !isZero(cfg.PriorityFee) {
+		slogs, err := rp.Deposit(ctx, sm, cfg.PriorityFee, iotextypes.TransactionLogType_PRIORITY_FEE)
+		if err != nil {
+			return nil, err
+		}
+		logs = append(logs, slogs...)
 	}
-	reg, ok := protocol.GetRegistry(ctx)
-	if !ok {
-		return nil, nil
+	if !isZero(cfg.BlobGasFee) {
+		slogs, err := rp.Deposit(ctx, sm, cfg.BlobGasFee, iotextypes.TransactionLogType_BLOB_FEE)
+		if err != nil {
+			return nil, err
+		}
+		logs = append(logs, slogs...)
 	}
-	rp := FindProtocol(reg)
-	if rp == nil {
-		return nil, nil
-	}
-	return rp.deposit(ctx, sm, sgdReceiver, totalAmount, sgdAmount, iotextypes.TransactionLogType_GAS_FEE)
+	return logs, nil
 }
 
 func isZero(a *big.Int) bool {

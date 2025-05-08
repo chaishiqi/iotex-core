@@ -28,11 +28,12 @@ import (
 	"github.com/iotexproject/iotex-proto/golang/iotexapi"
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 
-	"github.com/iotexproject/iotex-core/ioctl/cmd/hdwallet"
-	"github.com/iotexproject/iotex-core/ioctl/config"
-	"github.com/iotexproject/iotex-core/ioctl/output"
-	"github.com/iotexproject/iotex-core/ioctl/util"
-	"github.com/iotexproject/iotex-core/ioctl/validator"
+	"github.com/iotexproject/iotex-core/v2/ioctl/cmd/hdwallet"
+	"github.com/iotexproject/iotex-core/v2/ioctl/config"
+	"github.com/iotexproject/iotex-core/v2/ioctl/flag"
+	"github.com/iotexproject/iotex-core/v2/ioctl/output"
+	"github.com/iotexproject/iotex-core/v2/ioctl/util"
+	"github.com/iotexproject/iotex-core/v2/ioctl/validator"
 )
 
 // Multi-language support
@@ -59,6 +60,8 @@ var (
 // CryptoSm2 is a flag for sm2 cryptographic algorithm
 var CryptoSm2 bool
 
+var _passwordFlag = flag.NewStringVarP("password", "P", "", "input password for account")
+
 // AccountCmd represents the account command
 var AccountCmd = &cobra.Command{
 	Use:   "account",
@@ -84,6 +87,14 @@ func init() {
 	AccountCmd.PersistentFlags().StringVar(&config.ReadConfig.Endpoint, "endpoint",
 		config.ReadConfig.Endpoint, config.TranslateInLang(_flagEndpoint, config.UILanguage))
 	AccountCmd.PersistentFlags().BoolVar(&config.Insecure, "insecure", config.Insecure, config.TranslateInLang(_flagInsecure, config.UILanguage))
+}
+
+func RegisterPasswordFlag(cmd *cobra.Command) {
+	_passwordFlag.RegisterCommand(cmd)
+}
+
+func PasswordByFlag() string {
+	return _passwordFlag.Value().(string)
 }
 
 // Sign sign message with signer

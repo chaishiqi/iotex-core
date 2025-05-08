@@ -11,12 +11,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/iotexproject/go-pkgs/crypto"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
 )
 
 const (
@@ -252,23 +253,6 @@ func TestValidateRollDPoS(t *testing.T) {
 	)
 }
 
-func TestValidateArchiveMode(t *testing.T) {
-	cfg := Default
-	cfg.Chain.EnableArchiveMode = true
-	cfg.Chain.EnableTrielessStateDB = true
-	require.Error(t, ErrInvalidCfg, errors.Cause(ValidateArchiveMode(cfg)))
-	require.EqualError(t, ValidateArchiveMode(cfg), "Archive mode is incompatible with trieless state DB: invalid config value")
-	cfg.Chain.EnableArchiveMode = false
-	cfg.Chain.EnableTrielessStateDB = true
-	require.NoError(t, errors.Cause(ValidateArchiveMode(cfg)))
-	cfg.Chain.EnableArchiveMode = true
-	cfg.Chain.EnableTrielessStateDB = false
-	require.NoError(t, errors.Cause(ValidateArchiveMode(cfg)))
-	cfg.Chain.EnableArchiveMode = false
-	cfg.Chain.EnableTrielessStateDB = false
-	require.NoError(t, errors.Cause(ValidateArchiveMode(cfg)))
-}
-
 func TestValidateActPool(t *testing.T) {
 	cfg := Default
 	cfg.ActPool.MaxNumActsPerAcct = 0
@@ -307,6 +291,14 @@ func TestValidateActPool(t *testing.T) {
 			"maximum number of actions per pool cannot be less than maximum number of actions per account",
 		),
 	)
+}
+
+func TestBlobConfig(t *testing.T) {
+	r := require.New(t)
+	cfg := Default
+	blocks := uint32(time.Hour / cfg.DardanellesUpgrade.BlockInterval)
+	blocks *= (cfg.Chain.BlobStoreRetentionDays - 1) * 24
+	r.EqualValues(cfg.Genesis.MinBlocksForBlobRetention, blocks)
 }
 
 func TestValidateForkHeights(t *testing.T) {
@@ -384,6 +376,12 @@ func TestValidateForkHeights(t *testing.T) {
 			"Tsunami", ErrInvalidCfg, "Tsunami is heigher than Upernavik",
 		},
 		{
+			"Upernavik", ErrInvalidCfg, "Upernavik is heigher than Vanuatu",
+		},
+		{
+			"Vanuatu", ErrInvalidCfg, "Vanuatu is heigher than Wake",
+		},
+		{
 			"", nil, "",
 		},
 	}
@@ -445,6 +443,10 @@ func newTestCfg(fork string) Config {
 		cfg.Genesis.SumatraBlockHeight = cfg.Genesis.TsunamiBlockHeight + 1
 	case "Tsunami":
 		cfg.Genesis.TsunamiBlockHeight = cfg.Genesis.UpernavikBlockHeight + 1
+	case "Upernavik":
+		cfg.Genesis.UpernavikBlockHeight = cfg.Genesis.VanuatuBlockHeight + 1
+	case "Vanuatu":
+		cfg.Genesis.VanuatuBlockHeight = cfg.Genesis.WakeBlockHeight + 1
 	}
 	return cfg
 }

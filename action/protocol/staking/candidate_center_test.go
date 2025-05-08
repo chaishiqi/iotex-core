@@ -7,10 +7,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/pkg/unit"
-	"github.com/iotexproject/iotex-core/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/pkg/unit"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
 )
 
 // testEqual verifies m contains exactly the list
@@ -19,7 +19,7 @@ func testEqual(m *CandidateCenter, l CandidateList) bool {
 		return false
 	}
 	for _, v := range l {
-		d := m.GetByOwner(v.Owner)
+		d := m.GetByIdentifier(v.GetIdentifier())
 		if d == nil {
 			return false
 		}
@@ -60,21 +60,11 @@ func testEqualAllCommit(r *require.Assertions, m *CandidateCenter, old Candidate
 
 	// number of changed cand = change
 	r.Equal(change, len(m.change.view()))
-	delta := m.Delta()
-	ser, err := delta.Serialize()
-	r.NoError(err)
-
-	// test abort the changes
-	r.NoError(m.SetDelta(nil))
-	r.Equal(size, m.Size())
 	// m equal to old list, not equal to current
-	r.True(testEqual(m, old))
-	r.False(testEqual(m, list))
-	r.Nil(m.Delta())
+	r.False(testEqual(m, old))
+	r.True(testEqual(m, list))
 
 	// test commit
-	r.NoError(delta.Deserialize(ser))
-	r.NoError(m.SetDelta(delta))
 	r.NoError(m.LegacyCommit())
 	r.NoError(m.LegacyCommit()) // commit is idempotent
 	r.Equal(size+increase, m.Size())
@@ -105,14 +95,8 @@ func TestCandCenter(t *testing.T) {
 	r.Equal(len(testCandidates), m.Size())
 
 	// test export changes and commit
-	list := m.Delta()
-	r.NotNil(list)
-	r.Equal(len(list), m.Size())
-	r.True(testEqual(m, list))
-	r.NoError(m.SetDelta(list))
 	r.NoError(m.LegacyCommit())
 	r.Equal(len(testCandidates), m.Size())
-	r.True(testEqual(m, list))
 	old := m.All()
 	r.True(testEqual(m, old))
 
@@ -206,16 +190,11 @@ func TestCandCenter(t *testing.T) {
 	for i := range testDeltas {
 		r.NoError(m.Upsert(testDeltas[i]))
 	}
-	list = m.All()
+	list := m.All()
 	r.Equal(len(list), m.Size())
 	r.True(testEqual(m, list))
-	delta := m.Delta()
-	// 4 updates + 4 new
-	r.Equal(8, len(delta))
 	r.Equal(len(testCandidates)+4, m.Size())
 
-	// SetDelta using one's own Delta() does not change a thing
-	r.NoError(m.SetDelta(delta))
 	r.Equal(len(list), m.Size())
 	r.True(testEqual(m, list))
 	r.NoError(m.LegacyCommit())
@@ -253,9 +232,6 @@ func TestCandCenter(t *testing.T) {
 		d1.SelfStakeBucketIdx = conflict.SelfStakeBucketIdx
 		r.Equal(ErrInvalidSelfStkIndex, m.Upsert(d1))
 		d1.SelfStakeBucketIdx = self1
-
-		// no change yet, delta must be empty
-		r.Nil(m.Delta())
 
 		// upsert(d1)
 		d1.Operator = identityset.Address(13 + i*2) // identityset[13]+ don't conflict with existing
@@ -332,8 +308,7 @@ func TestCandCenter(t *testing.T) {
 func TestFixAlias(t *testing.T) {
 	r := require.New(t)
 
-	dk := protocol.NewDock()
-	view := protocol.View{}
+	views := protocol.NewViews()
 
 	for _, hasAlias := range []bool{false, true} {
 		// add 6 candidates into cand center
@@ -350,22 +325,19 @@ func TestFixAlias(t *testing.T) {
 		} else {
 			r.NoError(m.Commit())
 		}
-		r.NoError(view.Write(_protocolID, m))
+		views.Write(_protocolID, &ViewData{
+			candCenter: m,
+		})
 
 		// simulate handleCandidateUpdate: update name
-		center := candCenterFromNewCandidateStateManager(r, view, dk)
+		center := candCenterFromNewCandidateStateManager(r, views)
 		name := testCandidates[0].d.Name
 		nameAlias := center.GetByName(name)
 		nameAlias.Equal(testCandidates[0].d)
 		nameAlias.Name = "break"
-		{
-			r.NoError(center.Upsert(nameAlias))
-			delta := center.Delta()
-			r.Equal(1, len(delta))
-			r.NoError(dk.Load(_protocolID, _stakingCandCenter, &delta))
-		}
+		r.NoError(center.Upsert(nameAlias))
 
-		center = candCenterFromNewCandidateStateManager(r, view, dk)
+		center = candCenterFromNewCandidateStateManager(r, views)
 		n := center.GetByName("break")
 		n.Equal(nameAlias)
 		r.True(center.ContainsName("break"))
@@ -381,13 +353,10 @@ func TestFixAlias(t *testing.T) {
 		r.False(center.ContainsOperator(opAlias.Operator))
 		{
 			r.NoError(center.Upsert(opAlias))
-			delta := center.Delta()
-			r.Equal(2, len(delta))
-			r.NoError(dk.Load(_protocolID, _stakingCandCenter, &delta))
 		}
 
 		// verify cand center with name/op alias
-		center = candCenterFromNewCandidateStateManager(r, view, dk)
+		center = candCenterFromNewCandidateStateManager(r, views)
 		n = center.GetByName("break")
 		n.Equal(nameAlias)
 		r.True(center.ContainsName("break"))
@@ -407,12 +376,13 @@ func TestFixAlias(t *testing.T) {
 			} else {
 				r.NoError(center.Commit())
 			}
-			r.NoError(view.Write(_protocolID, center))
-			dk.Reset()
+			views.Write(_protocolID, &ViewData{
+				candCenter: center,
+			})
 		}
 
 		// verify cand center after Commit()
-		center = candCenterFromNewCandidateStateManager(r, view, dk)
+		center = candCenterFromNewCandidateStateManager(r, views)
 		n = center.GetByName("break")
 		n.Equal(nameAlias)
 		n = center.GetByOwner(testCandidates[1].d.Owner)
@@ -505,11 +475,11 @@ func TestMultipleNonStakingCandidate(t *testing.T) {
 		r.NoError(candcenter.Commit())
 		r.True(testEqual(candcenter, CandidateList(cands)))
 		// from state manager
-		dk := protocol.NewDock()
-		view := protocol.View{}
-		r.NoError(view.Write(_protocolID, candcenter))
-		dk.Reset()
-		candcenter = candCenterFromNewCandidateStateManager(r, view, dk)
+		views := protocol.NewViews()
+		views.Write(_protocolID, &ViewData{
+			candCenter: candcenter,
+		})
+		candcenter = candCenterFromNewCandidateStateManager(r, views)
 		r.True(testEqual(candcenter, CandidateList(cands)))
 	}
 	t.Run("nonstaked candidate not collision on bucket", func(t *testing.T) {
@@ -564,15 +534,114 @@ func TestMultipleNonStakingCandidate(t *testing.T) {
 	})
 }
 
-func candCenterFromNewCandidateStateManager(r *require.Assertions, view protocol.View, dk protocol.Dock) *CandidateCenter {
+func candCenterFromNewCandidateStateManager(r *require.Assertions, views *protocol.Views) *CandidateCenter {
 	// get cand center: csm.ConstructBaseView
-	v, err := view.Read(_protocolID)
+	v, err := views.Read(_protocolID)
 	r.NoError(err)
-	center := v.(*CandidateCenter).Base()
-	// get changes: csm.Sync()
-	delta := CandidateList{}
-	err = dk.Unload(_protocolID, _stakingCandCenter, &delta)
-	r.True(err == nil || err == protocol.ErrNoName)
-	r.NoError(center.SetDelta(delta))
-	return center
+	return v.(*ViewData).candCenter
+}
+
+func TestCandidateUpsert(t *testing.T) {
+	r := require.New(t)
+
+	m, err := NewCandidateCenter(nil)
+	r.NoError(err)
+	tests := []*Candidate{}
+	for _, v := range testCandidates {
+		tests = append(tests, v.d.Clone())
+	}
+	tests[0].Identifier = identityset.Address(10)
+	tests[1].Identifier = identityset.Address(11)
+	tests[2].Identifier = identityset.Address(12)
+	for _, v := range tests {
+		r.NoError(m.Upsert(v))
+		r.True(m.ContainsName(v.Name))
+		r.Equal(v, m.GetByName(v.Name))
+	}
+	r.Equal(len(tests), m.Size())
+
+	// test export changes and commit
+	r.NoError(m.LegacyCommit())
+	r.Equal(len(tests), m.Size())
+	old := m.All()
+	r.True(testEqual(m, old))
+
+	// test existence
+	for _, v := range tests {
+		r.True(m.ContainsName(v.Name))
+		r.True(m.ContainsOwner(v.Owner))
+		r.True(m.ContainsOperator(v.Operator))
+		r.True(m.ContainsSelfStakingBucket(v.SelfStakeBucketIdx))
+		r.Equal(v, m.GetByName(v.Name))
+		r.Equal(v, m.GetByOwner(v.Owner))
+		r.Equal(v, m.GetBySelfStakingIndex(v.SelfStakeBucketIdx))
+	}
+	t.Run("name change to another candidate", func(t *testing.T) {
+		nameChange := tests[0].Clone()
+		nameChange.Name = tests[1].Name
+		r.Equal(action.ErrInvalidCanName, m.Upsert(nameChange))
+	})
+
+	t.Run("owner change to another candidate", func(t *testing.T) {
+		ownerChange := tests[0].Clone()
+		ownerChange.Owner = tests[1].Owner
+		r.Equal(ErrInvalidOwner, m.Upsert(ownerChange))
+	})
+	t.Run("operator change to another candidate", func(t *testing.T) {
+		operatorChange := tests[0].Clone()
+		operatorChange.Operator = tests[1].Operator
+		r.Equal(ErrInvalidOperator, m.Upsert(operatorChange))
+	})
+	t.Run("upsert the same candidate", func(t *testing.T) {
+		r.NoError(m.Upsert(tests[0]))
+		r.NoError(m.Commit())
+		r.Equal(len(tests), m.Size())
+		testEqual(m, old)
+	})
+
+	t.Run("self staking bucket index change to another candidate", func(t *testing.T) {
+		selfStakingBucketChange := tests[0].Clone()
+		selfStakingBucketChange.SelfStakeBucketIdx = tests[1].SelfStakeBucketIdx
+		r.Equal(ErrInvalidSelfStkIndex, m.Upsert(selfStakingBucketChange))
+	})
+	t.Run("owner change to non-exist candidate", func(t *testing.T) {
+		ownerChange := tests[0].Clone()
+		ownerChange.Owner = identityset.Address(28)
+		r.NoError(m.Upsert(ownerChange))
+		r.NoError(m.Commit())
+		r.Equal(ownerChange, m.GetByName(ownerChange.Name))
+		r.Equal(ownerChange, m.GetByOwner(ownerChange.Owner))
+		r.Equal(ownerChange, m.GetBySelfStakingIndex(ownerChange.SelfStakeBucketIdx))
+		r.Equal(ownerChange, m.GetByIdentifier(ownerChange.Identifier))
+		r.Equal(len(testCandidates), m.Size())
+	})
+	t.Run("owner change to another candidate identifier", func(t *testing.T) {
+		ownerChange := tests[3].Clone()
+		ownerChange.Owner = tests[2].Identifier
+		r.Equal(action.ErrInvalidCanName, m.Upsert(ownerChange))
+	})
+	t.Run("insert new candidate and then change owner", func(t *testing.T) {
+		m, err := NewCandidateCenter(nil)
+		r.NoError(err)
+		for _, v := range tests {
+			r.NoError(m.Upsert(v))
+		}
+		newCandidate := &Candidate{
+			Name:               "newCandidate1",
+			Owner:              identityset.Address2(100),
+			Operator:           identityset.Address2(101),
+			Reward:             identityset.Address2(102),
+			SelfStake:          big.NewInt(0),
+			SelfStakeBucketIdx: 103,
+			Votes:              big.NewInt(0),
+		}
+		r.NoError(m.Upsert(newCandidate))
+		cand := newCandidate.Clone()
+		cand.Identifier = identityset.Address2(100)
+		cand.Owner = identityset.Address2(104)
+		r.NoError(m.Upsert(cand))
+		r.NoError(m.Commit())
+		r.Equal(len(tests)+1, m.Size())
+		r.Equal(cand, m.GetByIdentifier(cand.GetIdentifier()))
+	})
 }

@@ -13,13 +13,8 @@ import (
 
 	"github.com/iotexproject/iotex-address/address"
 
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/state"
-)
-
-// const
-const (
-	_stakingCandCenter = "candCenter"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/state"
 )
 
 type (
@@ -53,6 +48,7 @@ type (
 		ContainsSelfStakingBucket(uint64) bool
 		GetByName(string) *Candidate
 		GetByOwner(address.Address) *Candidate
+		GetByIdentifier(address.Address) *Candidate
 		Upsert(*Candidate) error
 		CreditBucketPool(*big.Int) error
 		DebitBucketPool(*big.Int, bool) error
@@ -64,7 +60,9 @@ type (
 	// CandidiateStateCommon is the common interface for candidate state manager and reader
 	CandidiateStateCommon interface {
 		ContainsSelfStakingBucket(uint64) bool
+		GetByIdentifier(address.Address) *Candidate
 		SR() protocol.StateReader
+		BucketGetByIndex
 	}
 
 	candSM struct {
@@ -75,7 +73,7 @@ type (
 )
 
 // NewCandidateStateManager returns a new CandidateStateManager instance
-func NewCandidateStateManager(sm protocol.StateManager, enableSMStorage bool) (CandidateStateManager, error) {
+func NewCandidateStateManager(sm protocol.StateManager) (CandidateStateManager, error) {
 	// TODO: we can store csm in a local cache, just as how statedb store the workingset
 	// b/c most time the sm is used before, no need to create another clone
 	csr, err := ConstructBaseView(sm)
@@ -86,21 +84,11 @@ func NewCandidateStateManager(sm protocol.StateManager, enableSMStorage bool) (C
 	// make a copy of candidate center and bucket pool, so they can be modified by csm
 	// and won't affect base view until being committed
 	view := csr.BaseView()
-	csm := &candSM{
+	return &candSM{
 		StateManager: sm,
-		candCenter:   view.candCenter.Base(),
-		bucketPool:   view.bucketPool.Copy(enableSMStorage),
-	}
-
-	// extract view change from SM
-	if err := csm.bucketPool.Sync(sm); err != nil {
-		return nil, errors.Wrap(err, "failed to sync bucket pool")
-	}
-
-	if err := csm.candCenter.Sync(sm); err != nil {
-		return nil, errors.Wrap(err, "failed to sync candidate center")
-	}
-	return csm, nil
+		candCenter:   view.candCenter,
+		bucketPool:   view.bucketPool,
+	}, nil
 }
 
 func newCandidateStateManager(sm protocol.StateManager) CandidateStateManager {
@@ -149,23 +137,17 @@ func (csm *candSM) GetByOwner(addr address.Address) *Candidate {
 	return csm.candCenter.GetByOwner(addr)
 }
 
+func (csm *candSM) GetByIdentifier(addr address.Address) *Candidate {
+	return csm.candCenter.GetByIdentifier(addr)
+}
+
 // Upsert writes the candidate into state manager and cand center
 func (csm *candSM) Upsert(d *Candidate) error {
 	if err := csm.candCenter.Upsert(d); err != nil {
 		return err
 	}
 
-	if err := csm.putCandidate(d); err != nil {
-		return err
-	}
-
-	delta := csm.candCenter.Delta()
-	if len(delta) == 0 {
-		return nil
-	}
-
-	// load change to sm
-	return csm.StateManager.Load(_protocolID, _stakingCandCenter, &delta)
+	return csm.putCandidate(d)
 }
 
 func (csm *candSM) CreditBucketPool(amount *big.Int) error {
@@ -177,26 +159,13 @@ func (csm *candSM) DebitBucketPool(amount *big.Int, newBucket bool) error {
 }
 
 func (csm *candSM) Commit(ctx context.Context) error {
-	height, err := csm.Height()
-	if err != nil {
-		return err
-	}
-	if featureWithHeightCtx, ok := protocol.GetFeatureWithHeightCtx(ctx); ok && featureWithHeightCtx.CandCenterHasAlias(height) {
-		if err := csm.candCenter.LegacyCommit(); err != nil {
-			return err
-		}
-	} else {
-		if err := csm.candCenter.Commit(); err != nil {
-			return err
-		}
-	}
-
-	if err := csm.bucketPool.Commit(csm); err != nil {
+	view := csm.DirtyView()
+	if err := view.Commit(ctx, csm); err != nil {
 		return err
 	}
 
 	// write updated view back to state factory
-	return csm.WriteView(_protocolID, csm.DirtyView())
+	return csm.WriteView(_protocolID, view)
 }
 
 func (csm *candSM) getBucket(index uint64) (*VoteBucket, error) {
@@ -334,7 +303,7 @@ func (csm *candSM) delVoterBucketIndex(addr address.Address, index uint64) error
 }
 
 func (csm *candSM) putCandidate(d *Candidate) error {
-	_, err := csm.PutState(d, protocol.NamespaceOption(_candidateNameSpace), protocol.KeyOption(d.Owner.Bytes()))
+	_, err := csm.PutState(d, protocol.NamespaceOption(_candidateNameSpace), protocol.KeyOption(d.GetIdentifier().Bytes()))
 	return err
 }
 

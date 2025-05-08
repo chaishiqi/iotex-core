@@ -10,8 +10,12 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+)
+
+const (
+	_stakeDurationLimit = 1050
 )
 
 // Errors
@@ -22,6 +26,7 @@ var (
 	ErrInvalidSelfStkIndex = errors.New("invalid self-staking bucket index")
 	ErrMissingField        = errors.New("missing data field")
 	ErrTypeAssertion       = errors.New("failed type assertion")
+	ErrDurationTooHigh     = errors.New("stake duration cannot exceed 1050 days")
 )
 
 func (p *Protocol) validateCreateStake(ctx context.Context, act *action.CreateStake) error {
@@ -30,6 +35,9 @@ func (p *Protocol) validateCreateStake(ctx context.Context, act *action.CreateSt
 	}
 	if act.Amount().Cmp(p.config.MinStakeAmount) == -1 {
 		return errors.Wrap(action.ErrInvalidAmount, "stake amount is less than the minimum requirement")
+	}
+	if protocol.MustGetFeatureCtx(ctx).CheckStakingDurationUpperLimit && act.Duration() > _stakeDurationLimit {
+		return ErrDurationTooHigh
 	}
 	return nil
 }
@@ -58,6 +66,9 @@ func (p *Protocol) validateDepositToStake(ctx context.Context, act *action.Depos
 }
 
 func (p *Protocol) validateRestake(ctx context.Context, act *action.Restake) error {
+	if protocol.MustGetFeatureCtx(ctx).CheckStakingDurationUpperLimit && act.Duration() > _stakeDurationLimit {
+		return ErrDurationTooHigh
+	}
 	return nil
 }
 
@@ -73,6 +84,9 @@ func (p *Protocol) validateCandidateRegister(ctx context.Context, act *action.Ca
 		}
 		return errors.Wrap(action.ErrInvalidAmount, "self staking amount is not valid")
 	}
+	if protocol.MustGetFeatureCtx(ctx).CheckStakingDurationUpperLimit && act.Duration() > _stakeDurationLimit {
+		return ErrDurationTooHigh
+	}
 	return nil
 }
 
@@ -86,8 +100,12 @@ func (p *Protocol) validateCandidateUpdate(ctx context.Context, act *action.Cand
 }
 
 func (p *Protocol) validateCandidateEndorsement(ctx context.Context, act *action.CandidateEndorsement) error {
-	if protocol.MustGetFeatureCtx(ctx).DisableDelegateEndorsement {
+	featureCtx := protocol.MustGetFeatureCtx(ctx)
+	if featureCtx.DisableDelegateEndorsement {
 		return errors.Wrap(action.ErrInvalidAct, "candidate endorsement is disabled")
+	}
+	if featureCtx.EnforceLegacyEndorsement && !act.IsLegacy() {
+		return errors.Wrap(action.ErrInvalidAct, "new candidate endorsement is disabled")
 	}
 	return nil
 }
@@ -95,6 +113,21 @@ func (p *Protocol) validateCandidateEndorsement(ctx context.Context, act *action
 func (p *Protocol) validateCandidateActivate(ctx context.Context, act *action.CandidateActivate) error {
 	if protocol.MustGetFeatureCtx(ctx).DisableDelegateEndorsement {
 		return errors.Wrap(action.ErrInvalidAct, "candidate activate is disabled")
+	}
+	return nil
+}
+
+func (p *Protocol) validateCandidateTransferOwnershipAction(ctx context.Context, act *action.CandidateTransferOwnership) error {
+	// TODO: remove this check after candidate transfer ownership is enabled
+	if protocol.MustGetFeatureCtx(ctx).CandidateIdentifiedByOwner {
+		return errors.Wrap(action.ErrInvalidAct, "candidate transfer ownership is disabled")
+	}
+	return nil
+}
+
+func (p *Protocol) validateMigrateStake(ctx context.Context, act *action.MigrateStake) error {
+	if !protocol.MustGetFeatureCtx(ctx).MigrateNativeStake {
+		return errors.Wrap(action.ErrInvalidAct, "migrate stake is disabled")
 	}
 	return nil
 }

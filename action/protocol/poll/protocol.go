@@ -14,14 +14,14 @@ import (
 	"github.com/iotexproject/iotex-election/committee"
 	"github.com/pkg/errors"
 
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/execution/evm"
-	"github.com/iotexproject/iotex-core/action/protocol/staking"
-	"github.com/iotexproject/iotex-core/action/protocol/vote"
-	"github.com/iotexproject/iotex-core/blockchain"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/state"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/execution/evm"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/staking"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/vote"
+	"github.com/iotexproject/iotex-core/v2/blockchain"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/state"
 )
 
 const (
@@ -133,10 +133,10 @@ func NewProtocol(
 	getUnproductiveDelegate GetUnproductiveDelegate,
 	electionCommittee committee.Committee,
 	stakingProto *staking.Protocol,
-	getBlockTimeFunc GetBlockTime,
+	_ GetBlockTime,
 	productivity Productivity,
-	getBlockHash evm.GetBlockHash,
-	getBlockTime evm.GetBlockTime,
+	_ evm.GetBlockHash,
+	_ evm.GetBlockTime,
 ) (Protocol, error) {
 	if scheme != _rollDPoSScheme {
 		return nil, nil
@@ -160,7 +160,6 @@ func NewProtocol(
 			candidateIndexer,
 			genesisConfig.NumCandidateDelegates,
 			genesisConfig.NumDelegates,
-			genesisConfig.DardanellesNumSubEpochs,
 			genesisConfig.ProductivityThreshold,
 			genesisConfig.ProbationEpochPeriod,
 			genesisConfig.UnproductiveDelegateMaxCacheSize,
@@ -184,7 +183,7 @@ func NewProtocol(
 			candidateIndexer,
 			electionCommittee,
 			genesisConfig.GravityChainStartHeight,
-			getBlockTimeFunc,
+			nil,
 			chainConfig.PollInitialCandidatesInterval,
 			slasher,
 		)
@@ -220,7 +219,7 @@ func NewProtocol(
 		}
 		return NewStakingCommand(stakingV1, stakingV2)
 	case _modeConsortium:
-		return NewConsortiumCommittee(candidateIndexer, readContract, getBlockHash)
+		return NewConsortiumCommittee(candidateIndexer, readContract, nil)
 	default:
 		return nil, errors.Errorf("unsupported poll mode %s", genesisConfig.PollMode)
 	}

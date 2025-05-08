@@ -3,7 +3,7 @@
 // or fitness for purpose and, to the extent permitted by law, all liability for your use of the code is disclaimed.
 // This source code is governed by Apache License 2.0 that can be found in the LICENSE file.
 
-package execution
+package execution_test
 
 import (
 	"bytes"
@@ -29,27 +29,28 @@ import (
 	"github.com/iotexproject/iotex-address/address"
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/account"
-	accountutil "github.com/iotexproject/iotex-core/action/protocol/account/util"
-	"github.com/iotexproject/iotex-core/action/protocol/execution/evm"
-	"github.com/iotexproject/iotex-core/action/protocol/rewarding"
-	"github.com/iotexproject/iotex-core/action/protocol/rolldpos"
-	"github.com/iotexproject/iotex-core/actpool"
-	"github.com/iotexproject/iotex-core/blockchain"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/blockdao"
-	"github.com/iotexproject/iotex-core/blockchain/filedao"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/blockindex"
-	"github.com/iotexproject/iotex-core/config"
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/pkg/unit"
-	"github.com/iotexproject/iotex-core/state/factory"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/testutil"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/account"
+	accountutil "github.com/iotexproject/iotex-core/v2/action/protocol/account/util"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/execution"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/execution/evm"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rewarding"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rolldpos"
+	"github.com/iotexproject/iotex-core/v2/actpool"
+	"github.com/iotexproject/iotex-core/v2/blockchain"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/blockdao"
+	"github.com/iotexproject/iotex-core/v2/blockchain/filedao"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/blockindex"
+	"github.com/iotexproject/iotex-core/v2/config"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/pkg/unit"
+	"github.com/iotexproject/iotex-core/v2/state/factory"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/testutil"
 )
 
 type (
@@ -71,6 +72,7 @@ type (
 		IsIceland  bool `json:"isIceland"`
 		IsLondon   bool `json:"isLondon"`
 		IsShanghai bool `json:"isShanghai"`
+		IsCancun   bool `json:"isCancun"`
 	}
 
 	Log struct {
@@ -108,7 +110,7 @@ type (
 )
 
 var (
-	fixedTime = time.Unix(genesis.Default.Timestamp, 0)
+	fixedTime = time.Unix(genesis.TestDefault().Timestamp, 0)
 )
 
 func (eb *ExpectedBalance) Balance() *big.Int {
@@ -271,18 +273,13 @@ func readExecution(
 	if err != nil {
 		return nil, nil, err
 	}
-	exec, err := action.NewExecutionWithAccessList(
-		contractAddr,
-		state.PendingNonce(),
-		ecfg.Amount(),
-		ecfg.GasLimit(),
-		ecfg.GasPrice(),
-		ecfg.ByteCode(),
-		ecfg.AccessList(),
-	)
-	if err != nil {
-		return nil, nil, err
+	exec := action.NewExecution(contractAddr, ecfg.Amount(), ecfg.ByteCode())
+	builder := (&action.EnvelopeBuilder{}).SetGasPrice(ecfg.GasPrice()).SetGasLimit(ecfg.GasLimit()).
+		SetNonce(state.PendingNonce()).SetAction(exec)
+	if len(ecfg.AccessList()) > 0 {
+		builder.SetTxType(action.AccessListTxType).SetAccessList(ecfg.AccessList())
 	}
+	elp := builder.Build()
 	addr := ecfg.PrivateKey().PublicKey().Address()
 	if addr == nil {
 		return nil, nil, errors.New("failed to get address")
@@ -292,10 +289,15 @@ func readExecution(
 		return nil, nil, err
 	}
 	ctx = evm.WithHelperCtx(ctx, evm.HelperContext{
-		GetBlockHash: dao.GetBlockHash,
-		GetBlockTime: getBlockTimeForTest,
+		GetBlockHash:   dao.GetBlockHash,
+		GetBlockTime:   getBlockTimeForTest,
+		DepositGasFunc: rewarding.DepositGas,
 	})
-	return sf.SimulateExecution(ctx, addr, exec)
+	ws, err := sf.WorkingSet(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return evm.SimulateExecution(ctx, ws, addr, elp)
 }
 
 func (sct *SmartContractTest) runExecutions(
@@ -321,25 +323,18 @@ func (sct *SmartContractTest) runExecutions(
 			nonce = state.PendingNonce()
 		}
 		nonces[executor.String()] = nonce
-		exec, err := action.NewExecutionWithAccessList(
+		exec := action.NewExecution(
 			contractAddrs[i],
-			nonce,
 			ecfg.Amount(),
-			ecfg.GasLimit(),
-			ecfg.GasPrice(),
 			ecfg.ByteCode(),
-			ecfg.AccessList(),
 		)
-		if err != nil {
-			return nil, nil, err
-		}
-		builder := &action.EnvelopeBuilder{}
-		builder.SetAction(exec).
-			SetNonce(exec.Nonce()).
-			SetGasLimit(ecfg.GasLimit()).
-			SetGasPrice(ecfg.GasPrice())
+		builder := (&action.EnvelopeBuilder{}).SetGasLimit(ecfg.GasLimit()).SetGasPrice(ecfg.GasPrice()).
+			SetNonce(nonce).SetAction(exec)
 		if sct.InitGenesis.IsShanghai {
 			builder.SetChainID(bc.ChainID())
+		}
+		if len(ecfg.AccessList()) > 0 {
+			builder.SetTxType(action.AccessListTxType).SetAccessList(ecfg.AccessList())
 		}
 		elp := builder.Build()
 		selp, err := action.Sign(elp, ecfg.PrivateKey())
@@ -355,7 +350,11 @@ func (sct *SmartContractTest) runExecutions(
 		}
 		hashes = append(hashes, selpHash)
 	}
-	blk, err := bc.MintNewBlock(fixedTime)
+	t, err := getBlockTimeForTest(bc.TipHeight() + 1)
+	if err != nil {
+		return nil, nil, err
+	}
+	blk, err := bc.MintNewBlock(t)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -437,6 +436,9 @@ func (sct *SmartContractTest) prepareBlockchain(
 		cfg.Genesis.Blockchain.SumatraBlockHeight = 0
 		cfg.Genesis.ActionGasLimit = 10000000
 	}
+	if sct.InitGenesis.IsCancun {
+		cfg.Genesis.Blockchain.VanuatuBlockHeight = 1
+	}
 	for _, expectedBalance := range sct.InitBalances {
 		cfg.Genesis.InitBalanceMap[expectedBalance.Account] = expectedBalance.Balance().String()
 	}
@@ -450,17 +452,13 @@ func (sct *SmartContractTest) prepareBlockchain(
 	var daoKV db.KVStore
 
 	factoryCfg := factory.GenerateConfig(cfg.Chain, cfg.Genesis)
-	if cfg.Chain.EnableTrielessStateDB {
-		if cfg.Chain.EnableStateDBCaching {
-			daoKV, err = db.CreateKVStoreWithCache(cfg.DB, cfg.Chain.TrieDBPath, cfg.Chain.StateDBCacheSize)
-		} else {
-			daoKV, err = db.CreateKVStore(cfg.DB, cfg.Chain.TrieDBPath)
-		}
-		r.NoError(err)
-		sf, err = factory.NewStateDB(factoryCfg, daoKV, factory.RegistryStateDBOption(registry))
+	if cfg.Chain.EnableStateDBCaching {
+		daoKV, err = db.CreateKVStoreWithCache(cfg.DB, cfg.Chain.TrieDBPath, cfg.Chain.StateDBCacheSize)
 	} else {
-		sf, err = factory.NewFactory(factoryCfg, db.NewMemKVStore(), factory.RegistryOption(registry))
+		daoKV, err = db.CreateKVStore(cfg.DB, cfg.Chain.TrieDBPath)
 	}
+	r.NoError(err)
+	sf, err = factory.NewStateDB(factoryCfg, daoKV, factory.RegistryStateDBOption(registry))
 	r.NoError(err)
 	ap, err := actpool.NewActPool(cfg.Genesis, sf, cfg.ActPool)
 	r.NoError(err)
@@ -486,7 +484,7 @@ func (sct *SmartContractTest) prepareBlockchain(
 	r.NoError(reward.Register(registry))
 
 	r.NotNil(bc)
-	execution := NewProtocol(dao.GetBlockHash, rewarding.DepositGasWithSGD, nil, getBlockTimeForTest)
+	execution := execution.NewProtocol(dao.GetBlockHash, rewarding.DepositGas, getBlockTimeForTest)
 	r.NoError(execution.Register(registry))
 	r.NoError(bc.Start(ctx))
 
@@ -544,9 +542,10 @@ func (sct *SmartContractTest) deployContracts(
 func (sct *SmartContractTest) run(r *require.Assertions) {
 	// prepare blockchain
 	ctx := context.Background()
-	cfg := deepcopy.Copy(config.Default).(config.Config)
+	defaultCfg := config.Default
+	defaultCfg.Genesis = genesis.TestDefault()
+	cfg := deepcopy.Copy(defaultCfg).(config.Config)
 	cfg.Chain.ProducerPrivKey = identityset.PrivateKey(28).HexString()
-	cfg.Chain.EnableTrielessStateDB = false
 	bc, sf, dao, ap := sct.prepareBlockchain(ctx, cfg, r)
 	defer func() {
 		r.NoError(bc.Stop(ctx))
@@ -588,7 +587,7 @@ func (sct *SmartContractTest) run(r *require.Assertions) {
 
 		if sct.InitGenesis.IsBering {
 			// if it is post bering, it compares the status with expected status
-			r.Equal(exec.ExpectedStatus, receipt.Status)
+			r.Equal(exec.ExpectedStatus, receipt.Status, receipt.ExecutionRevertMsg())
 		} else {
 			if exec.Failed {
 				r.Equal(uint64(iotextypes.ReceiptStatus_Failure), receipt.Status)
@@ -634,9 +633,10 @@ func (sct *SmartContractTest) run(r *require.Assertions) {
 
 func TestProtocol_Validate(t *testing.T) {
 	require := require.New(t)
-	p := NewProtocol(func(uint64) (hash.Hash256, error) {
+	p := execution.NewProtocol(func(uint64) (hash.Hash256, error) {
 		return hash.ZeroHash256, nil
-	}, rewarding.DepositGasWithSGD, nil, getBlockTimeForTest)
+	}, rewarding.DepositGas, getBlockTimeForTest)
+	g := genesis.TestDefault()
 
 	cases := []struct {
 		name      string
@@ -646,20 +646,21 @@ func TestProtocol_Validate(t *testing.T) {
 	}{
 		{"limit 32KB", 0, 32683, nil},
 		{"exceed 32KB", 0, 32684, action.ErrOversizedData},
-		{"limit 48KB", genesis.Default.SumatraBlockHeight, uint64(_executionSizeLimit48KB), nil},
-		{"exceed 48KB", genesis.Default.SumatraBlockHeight, uint64(_executionSizeLimit48KB) + 1, action.ErrOversizedData},
+		{"limit 48KB", g.SumatraBlockHeight, uint64(48 * 1024), nil},
+		{"exceed 48KB", g.SumatraBlockHeight, uint64(48*1024) + 1, action.ErrOversizedData},
 	}
 
+	builder := action.EnvelopeBuilder{}
 	for i := range cases {
 		t.Run(cases[i].name, func(t *testing.T) {
-			ex, err := action.NewExecution("2", uint64(1), big.NewInt(0), uint64(0), big.NewInt(0), make([]byte, cases[i].size))
-			require.NoError(err)
-			ctx := genesis.WithGenesisContext(context.Background(), config.Default.Genesis)
+			ex := action.NewExecution("2", big.NewInt(0), make([]byte, cases[i].size))
+			elp := builder.SetNonce(1).SetAction(ex).Build()
+			ctx := genesis.WithGenesisContext(context.Background(), g)
 			ctx = protocol.WithBlockCtx(ctx, protocol.BlockCtx{
 				BlockHeight: cases[i].height,
 			})
 			ctx = protocol.WithFeatureCtx(ctx)
-			require.Equal(cases[i].expectErr, errors.Cause(p.Validate(ctx, ex, nil)))
+			require.Equal(cases[i].expectErr, errors.Cause(p.Validate(ctx, elp, nil)))
 		})
 	}
 }
@@ -693,6 +694,7 @@ func TestProtocol_Handle(t *testing.T) {
 		cfg.Chain.EnableAsyncIndexWrite = false
 		cfg.Genesis.EnableGravityChainVoting = false
 		cfg.ActPool.MinGasPriceStr = "0"
+		cfg.Genesis = genesis.TestDefault()
 		cfg.Genesis.InitBalanceMap[identityset.Address(27).String()] = unit.ConvertIotxToRau(1000000000).String()
 		ctx := genesis.WithGenesisContext(context.Background(), cfg.Genesis)
 
@@ -729,7 +731,7 @@ func TestProtocol_Handle(t *testing.T) {
 				protocol.NewGenericValidator(sf, accountutil.AccountState),
 			)),
 		)
-		exeProtocol := NewProtocol(dao.GetBlockHash, rewarding.DepositGasWithSGD, nil, getBlockTimeForTest)
+		exeProtocol := execution.NewProtocol(dao.GetBlockHash, rewarding.DepositGas, getBlockTimeForTest)
 		require.NoError(exeProtocol.Register(registry))
 		require.NoError(bc.Start(ctx))
 		require.NotNil(bc)
@@ -738,12 +740,8 @@ func TestProtocol_Handle(t *testing.T) {
 		}()
 
 		data, _ := hex.DecodeString("608060405234801561001057600080fd5b5060df8061001f6000396000f3006080604052600436106049576000357c0100000000000000000000000000000000000000000000000000000000900463ffffffff16806360fe47b114604e5780636d4ce63c146078575b600080fd5b348015605957600080fd5b5060766004803603810190808035906020019092919050505060a0565b005b348015608357600080fd5b50608a60aa565b6040518082815260200191505060405180910390f35b8060008190555050565b600080549050905600a165627a7a7230582002faabbefbbda99b20217cf33cb8ab8100caf1542bf1f48117d72e2c59139aea0029")
-		execution, err := action.NewExecution(action.EmptyAddress, 1, big.NewInt(0), uint64(100000), big.NewInt(0), data)
-		require.NoError(err)
-
-		bd := &action.EnvelopeBuilder{}
-		elp := bd.SetAction(execution).
-			SetNonce(1).
+		execution := action.NewExecution(action.EmptyAddress, big.NewInt(0), data)
+		elp := (&action.EnvelopeBuilder{}).SetAction(execution).SetNonce(1).
 			SetGasLimit(100000).Build()
 		selp, err := action.Sign(elp, identityset.PrivateKey(27))
 		require.NoError(err)
@@ -792,12 +790,8 @@ func TestProtocol_Handle(t *testing.T) {
 
 		// store to key 0
 		data, _ = hex.DecodeString("60fe47b1000000000000000000000000000000000000000000000000000000000000000f")
-		execution, err = action.NewExecution(r.ContractAddress, 2, big.NewInt(0), uint64(120000), big.NewInt(0), data)
-		require.NoError(err)
-
-		bd = &action.EnvelopeBuilder{}
-		elp = bd.SetAction(execution).
-			SetNonce(2).
+		execution = action.NewExecution(r.ContractAddress, big.NewInt(0), data)
+		elp = (&action.EnvelopeBuilder{}).SetAction(execution).SetNonce(2).
 			SetGasLimit(120000).Build()
 		selp, err = action.Sign(elp, identityset.PrivateKey(27))
 		require.NoError(err)
@@ -826,12 +820,8 @@ func TestProtocol_Handle(t *testing.T) {
 		// read from key 0
 		data, err = hex.DecodeString("6d4ce63c")
 		require.NoError(err)
-		execution, err = action.NewExecution(r.ContractAddress, 3, big.NewInt(0), uint64(120000), big.NewInt(0), data)
-		require.NoError(err)
-
-		bd = &action.EnvelopeBuilder{}
-		elp = bd.SetAction(execution).
-			SetNonce(3).
+		execution = action.NewExecution(r.ContractAddress, big.NewInt(0), data)
+		elp = (&action.EnvelopeBuilder{}).SetAction(execution).SetNonce(3).
 			SetGasLimit(120000).Build()
 		selp, err = action.Sign(elp, identityset.PrivateKey(27))
 		require.NoError(err)
@@ -848,12 +838,8 @@ func TestProtocol_Handle(t *testing.T) {
 		require.Equal(eHash, blk.Receipts[0].ActionHash)
 
 		data, _ = hex.DecodeString("608060405234801561001057600080fd5b5060df8061001f6000396000f3006080604052600436106049576000357c0100000000000000000000000000000000000000000000000000000000900463ffffffff16806360fe47b114604e5780636d4ce63c146078575b600080fd5b348015605957600080fd5b5060766004803603810190808035906020019092919050505060a0565b005b348015608357600080fd5b50608a60aa565b6040518082815260200191505060405180910390f35b8060008190555050565b600080549050905600a165627a7a7230582002faabbefbbda99b20217cf33cb8ab8100caf1542bf1f48117d72e2c59139aea0029")
-		execution1, err := action.NewExecution(action.EmptyAddress, 4, big.NewInt(0), uint64(100000), big.NewInt(10), data)
-		require.NoError(err)
-		bd = &action.EnvelopeBuilder{}
-
-		elp = bd.SetAction(execution1).
-			SetNonce(4).
+		execution1 := action.NewExecution(action.EmptyAddress, big.NewInt(0), data)
+		elp = (&action.EnvelopeBuilder{}).SetAction(execution1).SetNonce(4).
 			SetGasLimit(100000).SetGasPrice(big.NewInt(10)).Build()
 		selp, err = action.Sign(elp, identityset.PrivateKey(27))
 		require.NoError(err)
@@ -1139,9 +1125,6 @@ func TestIstanbulEVM(t *testing.T) {
 		// staticcall -> staticcall -> revrt twice
 		NewSmartContractTest(t, "testdata-istanbul/write-protection-010.json")
 	})
-	t.Run("iip15-manager test", func(t *testing.T) {
-		NewSmartContractTest(t, "testdata-istanbul/iip15-manager.json")
-	})
 }
 
 func TestLondonEVM(t *testing.T) {
@@ -1223,6 +1206,9 @@ func TestLondonEVM(t *testing.T) {
 	t.Run("datacopy", func(t *testing.T) {
 		NewSmartContractTest(t, "testdata-london/datacopy.json")
 	})
+	t.Run("datacopy-with-accesslist", func(t *testing.T) {
+		NewSmartContractTest(t, "testdata-london/datacopy-accesslist.json")
+	})
 	t.Run("CVE-2021-39137-attack-replay", func(t *testing.T) {
 		NewSmartContractTest(t, "testdata-london/CVE-2021-39137-attack-replay.json")
 	})
@@ -1255,6 +1241,9 @@ func TestShanghaiEVM(t *testing.T) {
 	})
 	t.Run("datacopy", func(t *testing.T) {
 		NewSmartContractTest(t, "testdata-shanghai/datacopy.json")
+	})
+	t.Run("datacopy-with-accesslist", func(t *testing.T) {
+		NewSmartContractTest(t, "testdata-shanghai/datacopy-accesslist.json")
 	})
 	t.Run("f.value", func(t *testing.T) {
 		NewSmartContractTest(t, "testdata-shanghai/f.value.json")
@@ -1321,6 +1310,30 @@ func TestShanghaiEVM(t *testing.T) {
 	})
 }
 
+func TestCancunEVM(t *testing.T) {
+	t.Run("eip1153-transientstorage", func(t *testing.T) {
+		NewSmartContractTest(t, "testdata-cancun/transientstorage.json")
+	})
+	t.Run("eip5656-mcopy", func(t *testing.T) {
+		NewSmartContractTest(t, "testdata-cancun/mcopy.json")
+	})
+	t.Run("eip4844-point_evaluation_precompile", func(t *testing.T) {
+		NewSmartContractTest(t, "testdata-cancun/point_evaluation.json")
+	})
+	t.Run("eip4844-blobhash", func(t *testing.T) {
+		NewSmartContractTest(t, "testdata-cancun/blobhash.json")
+	})
+	t.Run("eip7516-blobbasefee", func(t *testing.T) {
+		NewSmartContractTest(t, "testdata-cancun/blobbasefee.json")
+	})
+	t.Run("eip1559-basefee", func(t *testing.T) {
+		NewSmartContractTest(t, "testdata-cancun/basefee.json")
+	})
+	t.Run("eip6780-selfdestruct", func(t *testing.T) {
+		NewSmartContractTest(t, "testdata-cancun/selfdestruct.json")
+	})
+}
+
 func benchmarkHotContractWithFactory(b *testing.B, async bool) {
 	sct := SmartContractTest{
 		InitBalances: []ExpectedBalance{
@@ -1343,8 +1356,8 @@ func benchmarkHotContractWithFactory(b *testing.B, async bool) {
 	r := require.New(b)
 	ctx := context.Background()
 	cfg := config.Default
+	cfg.Genesis = genesis.TestDefault()
 	cfg.Genesis.NumSubEpochs = uint64(b.N)
-	cfg.Chain.EnableTrielessStateDB = false
 	if async {
 		cfg.Genesis.GreenlandBlockHeight = 0
 	} else {
@@ -1421,6 +1434,7 @@ func benchmarkHotContractWithStateDB(b *testing.B, cachedStateDBOption bool) {
 	r := require.New(b)
 	ctx := context.Background()
 	cfg := config.Default
+	cfg.Genesis = genesis.TestDefault()
 	cfg.Genesis.NumSubEpochs = uint64(b.N)
 	if cachedStateDBOption {
 		cfg.Chain.EnableStateDBCaching = true

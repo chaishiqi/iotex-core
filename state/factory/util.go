@@ -1,4 +1,4 @@
-// Copyright (c) 2019 IoTeX Foundation
+// Copyright (c) 2024 IoTeX Foundation
 // This source code is provided 'as is' and no warranties are given as to title or non-infringement, merchantability
 // or fitness for purpose and, to the extent permitted by law, all liability for your use of the code is disclaimed.
 // This source code is governed by Apache License 2.0 that can be found in the LICENSE file.
@@ -13,14 +13,13 @@ import (
 	"github.com/iotexproject/go-pkgs/hash"
 	"github.com/pkg/errors"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/db/trie"
-	"github.com/iotexproject/iotex-core/db/trie/mptrie"
-	"github.com/iotexproject/iotex-core/state"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/db/trie"
+	"github.com/iotexproject/iotex-core/v2/db/trie/mptrie"
+	"github.com/iotexproject/iotex-core/v2/state"
 )
 
 func processOptions(opts ...protocol.StateOption) (*protocol.StateConfig, error) {
@@ -74,17 +73,27 @@ func calculateLogsBloom(ctx context.Context, receipts []*action.Receipt) bloom.B
 	return bloom
 }
 
-// generateWorkingSetCacheKey generates hash key for workingset cache by hashing blockheader core and producer pubkey
-func generateWorkingSetCacheKey(blkHeader block.Header, producerAddr string) hash.Hash256 {
-	sum := append(blkHeader.SerializeCore(), []byte(producerAddr)...)
-	return hash.Hash256b(sum)
+func calculateGasUsed(receipts []*action.Receipt) uint64 {
+	var gas uint64
+	for _, receipt := range receipts {
+		gas += receipt.GasConsumed
+	}
+	return gas
+}
+
+func calculateBlobGasUsed(receipts []*action.Receipt) uint64 {
+	var blobGas uint64
+	for _, receipt := range receipts {
+		blobGas += receipt.BlobGasUsed
+	}
+	return blobGas
 }
 
 func protocolPreCommit(ctx context.Context, sr protocol.StateManager) error {
 	if reg, ok := protocol.GetRegistry(ctx); ok {
 		for _, p := range reg.All() {
 			post, ok := p.(protocol.PreCommitter)
-			if ok && sr.ProtocolDirty(p.Name()) {
+			if ok {
 				if err := post.PreCommit(ctx, sr); err != nil {
 					return err
 				}
@@ -98,7 +107,7 @@ func protocolCommit(ctx context.Context, sr protocol.StateManager) error {
 	if reg, ok := protocol.GetRegistry(ctx); ok {
 		for _, p := range reg.All() {
 			post, ok := p.(protocol.Committer)
-			if ok && sr.ProtocolDirty(p.Name()) {
+			if ok {
 				if err := post.Commit(ctx, sr); err != nil {
 					return err
 				}
@@ -108,30 +117,35 @@ func protocolCommit(ctx context.Context, sr protocol.StateManager) error {
 	return nil
 }
 
-func readStates(kvStore db.KVStore, namespace string, keys [][]byte) ([][]byte, error) {
+func readStates(kvStore db.KVStore, namespace string, keys [][]byte) ([][]byte, [][]byte, error) {
+	var (
+		ks, values [][]byte
+		err        error
+	)
 	if keys == nil {
-		_, values, err := kvStore.Filter(namespace, func(k, v []byte) bool { return true }, nil, nil)
+		ks, values, err = kvStore.Filter(namespace, func(k, v []byte) bool { return true }, nil, nil)
 		if err != nil {
 			if errors.Cause(err) == db.ErrNotExist || errors.Cause(err) == db.ErrBucketNotExist {
-				return nil, errors.Wrapf(state.ErrStateNotExist, "failed to get states of ns = %x", namespace)
+				return nil, nil, errors.Wrapf(state.ErrStateNotExist, "failed to get states of ns = %x", namespace)
 			}
-			return nil, err
+			return nil, nil, err
 		}
-		return values, nil
+		return ks, values, nil
 	}
-	var values [][]byte
 	for _, key := range keys {
 		value, err := kvStore.Get(namespace, key)
 		switch errors.Cause(err) {
 		case db.ErrNotExist, db.ErrBucketNotExist:
 			values = append(values, nil)
+			ks = append(ks, key)
 		case nil:
 			values = append(values, value)
+			ks = append(ks, key)
 		default:
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	return values, nil
+	return ks, values, nil
 }
 
 func newTwoLayerTrie(ns string, dao db.KVStore, rootKey string, create bool) (trie.TwoLayerTrie, error) {

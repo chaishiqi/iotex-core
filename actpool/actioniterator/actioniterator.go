@@ -9,7 +9,7 @@ import (
 	"bytes"
 	"container/heap"
 
-	"github.com/iotexproject/iotex-core/action"
+	"github.com/iotexproject/iotex-core/v2/action"
 )
 
 // ActionByPrice implements both the sort and the heap interface, making it useful
@@ -80,7 +80,7 @@ func NewActionIterator(accountActs map[string][]*action.SealedEnvelope) ActionIt
 	}
 }
 
-// LoadNext load next action of account of top action
+// loadNextActionForTopAccount load next action of account of top action
 func (ai *actionIterator) loadNextActionForTopAccount() {
 	callerAddrStr := ai.heads[0].SenderAddress().String()
 	if actions, ok := ai.accountActs[callerAddrStr]; ok && len(actions) > 0 {

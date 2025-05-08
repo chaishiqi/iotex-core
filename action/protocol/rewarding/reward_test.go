@@ -19,58 +19,105 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/account"
-	accountutil "github.com/iotexproject/iotex-core/action/protocol/account/util"
-	"github.com/iotexproject/iotex-core/action/protocol/poll"
-	"github.com/iotexproject/iotex-core/action/protocol/rewarding/rewardingpb"
-	"github.com/iotexproject/iotex-core/action/protocol/rolldpos"
-	"github.com/iotexproject/iotex-core/blockchain"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/db/batch"
-	"github.com/iotexproject/iotex-core/pkg/unit"
-	"github.com/iotexproject/iotex-core/state"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/test/mock/mock_chainmanager"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/account"
+	accountutil "github.com/iotexproject/iotex-core/v2/action/protocol/account/util"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/poll"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rewarding/rewardingpb"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rolldpos"
+	"github.com/iotexproject/iotex-core/v2/blockchain"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/db/batch"
+	"github.com/iotexproject/iotex-core/v2/pkg/unit"
+	"github.com/iotexproject/iotex-core/v2/state"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/test/mock/mock_chainmanager"
 )
 
 func TestProtocol_GrantBlockReward(t *testing.T) {
-	testProtocol(t, func(t *testing.T, ctx context.Context, sm protocol.StateManager, p *Protocol) {
-		blkCtx, ok := protocol.GetBlockCtx(ctx)
-		require.True(t, ok)
+	req := require.New(t)
+	for _, tv := range []struct {
+		blockReward *big.Int
+		deposit     *big.Int
+		isWakeBlock bool
+	}{
+		{big.NewInt(10), big.NewInt(200), false},
+		{big.NewInt(48), big.NewInt(300), true},
+	} {
+		testProtocol(t, func(t *testing.T, ctx context.Context, sm protocol.StateManager, p *Protocol) {
+			if tv.isWakeBlock {
+				g := genesis.MustExtractGenesisContext(ctx)
+				g.WakeBlockRewardStr = tv.blockReward.String()
+				blkCtx := protocol.MustGetBlockCtx(ctx)
+				blkCtx.BlockHeight = g.WakeBlockHeight
+				ctx = genesis.WithGenesisContext(protocol.WithBlockCtx(ctx, blkCtx), g)
+				req.NoError(p.CreatePreStates(ctx, sm))
+			}
+			// verify block reward
+			br, err := p.BlockReward(ctx, sm)
+			req.NoError(err)
+			req.Equal(tv.blockReward, br)
+			// Grant block reward will fail because of no available balance
+			_, err = p.GrantBlockReward(ctx, sm)
+			req.Error(err)
 
-		// Grant block reward will fail because of no available balance
-		_, err := p.GrantBlockReward(ctx, sm)
-		require.Error(t, err)
+			_, err = p.Deposit(ctx, sm, tv.deposit, iotextypes.TransactionLogType_DEPOSIT_TO_REWARDING_FUND)
+			req.NoError(err)
 
-		_, err = p.Deposit(ctx, sm, big.NewInt(200), iotextypes.TransactionLogType_DEPOSIT_TO_REWARDING_FUND)
-		require.NoError(t, err)
+			// Grant block reward
+			rewardLog, err := p.GrantBlockReward(ctx, sm)
+			req.NoError(err)
+			req.Equal(p.addr.String(), rewardLog.Address)
+			var rl rewardingpb.RewardLog
+			req.NoError(proto.Unmarshal(rewardLog.Data, &rl))
+			req.Equal(rewardingpb.RewardLog_BLOCK_REWARD, rl.Type)
+			req.Equal(tv.blockReward.String(), rl.Amount)
 
-		// Grant block reward
-		rewardLog, err := p.GrantBlockReward(ctx, sm)
-		require.NoError(t, err)
-		require.Equal(t, p.addr.String(), rewardLog.Address)
-		var rl rewardingpb.RewardLog
-		require.NoError(t, proto.Unmarshal(rewardLog.Data, &rl))
-		require.Equal(t, rewardingpb.RewardLog_BLOCK_REWARD, rl.Type)
-		require.Equal(t, "10", rl.Amount)
+			availableBalance, _, err := p.AvailableBalance(ctx, sm)
+			req.NoError(err)
+			req.Equal(tv.deposit.Sub(tv.deposit, tv.blockReward), availableBalance)
+			// Operator shouldn't get reward
+			blkCtx := protocol.MustGetBlockCtx(ctx)
+			unclaimedBalance, _, err := p.UnclaimedBalance(ctx, sm, blkCtx.Producer)
+			req.NoError(err)
+			req.Equal(big.NewInt(0), unclaimedBalance)
+			// Beneficiary should get reward
+			unclaimedBalance, _, err = p.UnclaimedBalance(ctx, sm, identityset.Address(0))
+			req.NoError(err)
+			req.Equal(tv.blockReward, unclaimedBalance)
 
-		availableBalance, _, err := p.AvailableBalance(ctx, sm)
-		require.NoError(t, err)
-		assert.Equal(t, big.NewInt(190), availableBalance)
-		// Operator shouldn't get reward
-		unclaimedBalance, _, err := p.UnclaimedBalance(ctx, sm, blkCtx.Producer)
-		require.NoError(t, err)
-		assert.Equal(t, big.NewInt(0), unclaimedBalance)
-		// Beneficiary should get reward
-		unclaimedBalance, _, err = p.UnclaimedBalance(ctx, sm, identityset.Address(0))
-		require.NoError(t, err)
-		assert.Equal(t, big.NewInt(10), unclaimedBalance)
+			// Grant the same block reward again will fail
+			_, err = p.GrantBlockReward(ctx, sm)
+			req.Error(err)
 
-		// Grant the same block reward again will fail
-		_, err = p.GrantBlockReward(ctx, sm)
-		require.Error(t, err)
-	}, false)
+			// Grant with priority fee after VanuatuBlockHeight
+			blkCtx.AccumulatedTips = *big.NewInt(5)
+			blkCtx.BlockHeight = genesis.TestDefault().VanuatuBlockHeight
+			ctx = protocol.WithFeatureCtx(protocol.WithBlockCtx(ctx, blkCtx))
+			tLog, err := DepositGas(ctx, sm, nil, protocol.PriorityFeeOption(&blkCtx.AccumulatedTips))
+			req.NoError(err)
+			req.Equal(tLog[0].Type, iotextypes.TransactionLogType_PRIORITY_FEE)
+			req.Equal(&blkCtx.AccumulatedTips, tLog[0].Amount)
+			rewardLog, err = p.GrantBlockReward(ctx, sm)
+			req.NoError(err)
+			rls, err := UnmarshalRewardLog(rewardLog.Data)
+			req.NoError(err)
+			req.Len(rls.Logs, 2)
+			req.Equal(rewardingpb.RewardLog_BLOCK_REWARD, rls.Logs[0].Type)
+			req.Equal(tv.blockReward.String(), rls.Logs[0].Amount)
+			req.Equal(rewardingpb.RewardLog_PRIORITY_BONUS, rls.Logs[1].Type)
+			req.Equal(blkCtx.AccumulatedTips.String(), rls.Logs[1].Amount)
+
+			// check available and receiver balance
+			availableBalance, _, err = p.AvailableBalance(ctx, sm)
+			req.NoError(err)
+			req.Equal(tv.deposit.Sub(tv.deposit, tv.blockReward), availableBalance)
+			unclaimedBalance, _, err = p.UnclaimedBalance(ctx, sm, identityset.Address(0))
+			req.NoError(err)
+			tv.blockReward.Lsh(tv.blockReward, 1)
+			req.Equal(tv.blockReward.Add(tv.blockReward, &blkCtx.AccumulatedTips), unclaimedBalance)
+		}, false)
+	}
 }
 
 func TestProtocol_GrantEpochReward(t *testing.T) {
@@ -231,7 +278,7 @@ func TestProtocol_ClaimReward(t *testing.T) {
 		require.NoError(t, err)
 		initBalance := primAcc.Balance
 
-		_, err = p.Claim(claimCtx, sm, big.NewInt(5))
+		_, err = p.Claim(claimCtx, sm, big.NewInt(5), claimActionCtx.Caller)
 		require.NoError(t, err)
 
 		totalBalance, _, err := p.TotalBalance(ctx, sm)
@@ -246,11 +293,11 @@ func TestProtocol_ClaimReward(t *testing.T) {
 		assert.Equal(t, initBalance, primAcc.Balance)
 
 		// Claim negative amount of token will fail
-		_, err = p.Claim(claimCtx, sm, big.NewInt(-5))
+		_, err = p.Claim(claimCtx, sm, big.NewInt(-5), claimActionCtx.Caller)
 		require.Error(t, err)
 
 		// Claim 0 amount won't fail, but also will not get the token
-		_, err = p.Claim(claimCtx, sm, big.NewInt(0))
+		_, err = p.Claim(claimCtx, sm, big.NewInt(0), claimActionCtx.Caller)
 		require.NoError(t, err)
 
 		totalBalance, _, err = p.TotalBalance(ctx, sm)
@@ -264,7 +311,7 @@ func TestProtocol_ClaimReward(t *testing.T) {
 		assert.Equal(t, initBalance, primAcc.Balance)
 
 		// Claim another 5 token
-		rlog, err := p.Claim(claimCtx, sm, big.NewInt(5))
+		rlog, err := p.Claim(claimCtx, sm, big.NewInt(5), claimActionCtx.Caller)
 		require.NoError(t, err)
 		require.NoError(t, err)
 		require.NotNil(t, rlog)
@@ -284,7 +331,7 @@ func TestProtocol_ClaimReward(t *testing.T) {
 		assert.Equal(t, initBalance, primAcc.Balance)
 
 		// Claim the 3-rd 5 token will fail be cause no balance for the address
-		_, err = p.Claim(claimCtx, sm, big.NewInt(5))
+		_, err = p.Claim(claimCtx, sm, big.NewInt(5), claimActionCtx.Caller)
 		require.Error(t, err)
 
 		// Operator should have nothing to claim
@@ -292,7 +339,7 @@ func TestProtocol_ClaimReward(t *testing.T) {
 		require.True(t, ok)
 		claimActionCtx.Caller = blkCtx.Producer
 		claimCtx = protocol.WithActionCtx(ctx, claimActionCtx)
-		_, err = p.Claim(claimCtx, sm, big.NewInt(1))
+		_, err = p.Claim(claimCtx, sm, big.NewInt(1), claimActionCtx.Caller)
 		require.Error(t, err)
 	}, false)
 }
@@ -330,7 +377,7 @@ func TestProtocol_NoRewardAddr(t *testing.T) {
 		}).AnyTimes()
 	sm.EXPECT().Height().Return(uint64(1), nil).AnyTimes()
 
-	ge := genesis.Default
+	ge := genesis.TestDefault()
 	ge.Rewarding.InitBalanceStr = "0"
 	ge.Rewarding.BlockRewardStr = "10"
 	ge.Rewarding.EpochRewardStr = "100"
@@ -348,9 +395,9 @@ func TestProtocol_NoRewardAddr(t *testing.T) {
 
 	p := NewProtocol(ge.Rewarding)
 	rp := rolldpos.NewProtocol(
-		genesis.Default.NumCandidateDelegates,
-		genesis.Default.NumDelegates,
-		genesis.Default.NumSubEpochs,
+		ge.NumCandidateDelegates,
+		ge.NumDelegates,
+		ge.NumSubEpochs,
 	)
 	abps := []*state.Candidate{
 		{
@@ -364,7 +411,7 @@ func TestProtocol_NoRewardAddr(t *testing.T) {
 			RewardAddress: identityset.Address(1).String(),
 		},
 	}
-	g := genesis.Default
+	g := genesis.TestDefault()
 	committee := mock_committee.NewMockCommittee(ctrl)
 	slasher, err := poll.NewSlasher(
 		func(uint64, uint64) (map[string]uint64, error) {
@@ -381,7 +428,6 @@ func TestProtocol_NoRewardAddr(t *testing.T) {
 		nil,
 		2,
 		2,
-		g.DardanellesNumSubEpochs,
 		g.ProductivityThreshold,
 		g.ProbationEpochPeriod,
 		g.UnproductiveDelegateMaxCacheSize,
@@ -429,7 +475,7 @@ func TestProtocol_NoRewardAddr(t *testing.T) {
 		ctx,
 		protocol.BlockCtx{
 			Producer:    identityset.Address(0),
-			BlockHeight: genesis.Default.NumDelegates * genesis.Default.NumSubEpochs,
+			BlockHeight: g.NumDelegates * g.NumSubEpochs,
 		},
 	)
 	ctx = protocol.WithActionCtx(
@@ -480,4 +526,80 @@ func TestProtocol_NoRewardAddr(t *testing.T) {
 	assert.Equal(t, rewardingpb.RewardLog_EPOCH_REWARD, rl.Type)
 	assert.Equal(t, identityset.Address(1).String(), rl.Addr)
 	assert.Equal(t, "50", rl.Amount)
+}
+
+func TestRewardLogCompatibility(t *testing.T) {
+	r := require.New(t)
+	rl := &rewardingpb.RewardLog{
+		Type:   rewardingpb.RewardLog_BLOCK_REWARD,
+		Addr:   "io1",
+		Amount: "100",
+	}
+	data, err := proto.Marshal(rl)
+	r.NoError(err)
+	rls := &rewardingpb.RewardLogs{
+		Logs: []*rewardingpb.RewardLog{rl},
+	}
+	datas, err := proto.Marshal(rls)
+	r.NoError(err)
+	t.Logf("rls = %+v", rls)
+
+	rls2, err := UnmarshalRewardLog(data)
+	r.NoError(err)
+	t.Logf("decoded from rl = %+v", rls2)
+	datao, err := proto.Marshal(rls2)
+	r.NoError(err)
+	r.Equal(datas, datao)
+
+	rls2, err = UnmarshalRewardLog(datas)
+	r.NoError(err)
+	t.Logf("decoded from rls = %+v", rls2)
+	datao, err = proto.Marshal(rls2)
+	r.NoError(err)
+	r.Equal(datas, datao)
+}
+
+func TestProtocol_CalculateReward(t *testing.T) {
+	req := require.New(t)
+	var (
+		dardanellesBlockReward = unit.ConvertIotxToRau(8)
+		wakeBlockReward, _     = big.NewInt(0).SetString("4800000000000000000", 10)
+	)
+	for _, tv := range []struct {
+		accumuTips                    *big.Int
+		isWakeBlock                   bool
+		blockReward, totalReward, tip *big.Int
+	}{
+		{unit.ConvertIotxToRau(3), false, dardanellesBlockReward, unit.ConvertIotxToRau(11), unit.ConvertIotxToRau(3)},
+		{unit.ConvertIotxToRau(12), false, dardanellesBlockReward, unit.ConvertIotxToRau(20), unit.ConvertIotxToRau(12)},
+		{unit.ConvertIotxToRau(3), true, (&big.Int{}).Sub(wakeBlockReward, unit.ConvertIotxToRau(3)), wakeBlockReward, unit.ConvertIotxToRau(3)},
+		{unit.ConvertIotxToRau(6), true, (&big.Int{}).SetInt64(0), unit.ConvertIotxToRau(6), unit.ConvertIotxToRau(6)},
+	} {
+		testProtocol(t, func(t *testing.T, ctx context.Context, sm protocol.StateManager, p *Protocol) {
+			// update block reward
+			g := genesis.MustExtractGenesisContext(ctx)
+			blkCtx := protocol.MustGetBlockCtx(ctx)
+			blkCtx.AccumulatedTips.Set(tv.accumuTips)
+			if tv.isWakeBlock {
+				g.WakeBlockRewardStr = wakeBlockReward.String()
+				blkCtx.BlockHeight = g.WakeBlockHeight
+				ctx = protocol.WithFeatureCtx(genesis.WithGenesisContext(protocol.WithBlockCtx(ctx, blkCtx), g))
+				req.NoError(p.CreatePreStates(ctx, sm))
+			} else {
+				g.DardanellesBlockRewardStr = dardanellesBlockReward.String()
+				blkCtx.BlockHeight = g.DardanellesBlockHeight
+				ctx = genesis.WithGenesisContext(protocol.WithBlockCtx(ctx, blkCtx), g)
+				req.NoError(p.CreatePreStates(ctx, sm))
+				blkCtx.BlockHeight = g.VanuatuBlockHeight
+				ctx = protocol.WithFeatureCtx(genesis.WithGenesisContext(protocol.WithBlockCtx(ctx, blkCtx), g))
+			}
+			// verify block reward, total reward, and tip
+			total, br, tip, err := p.calculateTotalRewardAndTip(ctx, sm)
+			req.NoError(err)
+			req.Zero(tv.blockReward.Cmp(br))
+			req.Zero(tv.totalReward.Cmp(total))
+			req.Zero(tv.tip.Cmp(tip))
+			req.Zero(total.Cmp(br.Add(br, tip)))
+		}, false)
+	}
 }

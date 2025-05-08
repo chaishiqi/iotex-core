@@ -9,10 +9,10 @@ import (
 	"github.com/iotexproject/iotex-address/address"
 	"github.com/iotexproject/iotex-election/util"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/staking"
-	"github.com/iotexproject/iotex-core/state"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/staking"
+	"github.com/iotexproject/iotex-core/v2/state"
 )
 
 type nativeStakingV2 struct {
@@ -69,12 +69,12 @@ func (ns *nativeStakingV2) CreatePostSystemActions(ctx context.Context, sr proto
 	return createPostSystemActions(ctx, sr, ns)
 }
 
-func (ns *nativeStakingV2) Handle(ctx context.Context, act action.Action, sm protocol.StateManager) (*action.Receipt, error) {
-	return handle(ctx, act, sm, ns.candIndexer, ns.addr.String())
+func (ns *nativeStakingV2) Handle(ctx context.Context, elp action.Envelope, sm protocol.StateManager) (*action.Receipt, error) {
+	return handle(ctx, elp.Action(), sm, ns.candIndexer, ns.addr.String())
 }
 
-func (ns *nativeStakingV2) Validate(ctx context.Context, act action.Action, sr protocol.StateReader) error {
-	return validate(ctx, sr, ns, act)
+func (ns *nativeStakingV2) Validate(ctx context.Context, elp action.Envelope, sr protocol.StateReader) error {
+	return validate(ctx, sr, ns, elp.Action())
 }
 
 func (ns *nativeStakingV2) CalculateCandidatesByHeight(ctx context.Context, sr protocol.StateReader, height uint64) (state.CandidateList, error) {

@@ -6,10 +6,10 @@
 package rolldpos
 
 import (
-	"github.com/iotexproject/iotex-core/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
 	"github.com/pkg/errors"
 
-	"github.com/iotexproject/iotex-core/endorsement"
+	"github.com/iotexproject/iotex-core/v2/endorsement"
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 )
 
@@ -50,13 +50,9 @@ func (ecm *EndorsedConsensusMessage) Height() uint64 {
 
 // Proto converts an endorsement to endorse proto
 func (ecm *EndorsedConsensusMessage) Proto() (*iotextypes.ConsensusMessage, error) {
-	ebp, err := ecm.endorsement.Proto()
-	if err != nil {
-		return nil, err
-	}
 	cmsg := &iotextypes.ConsensusMessage{
 		Height:      ecm.height,
-		Endorsement: ebp,
+		Endorsement: ecm.endorsement.Proto(),
 	}
 	switch message := ecm.message.(type) {
 	case *ConsensusVote:

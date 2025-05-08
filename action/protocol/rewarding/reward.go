@@ -15,15 +15,15 @@ import (
 	"github.com/iotexproject/iotex-address/address"
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	accountutil "github.com/iotexproject/iotex-core/action/protocol/account/util"
-	"github.com/iotexproject/iotex-core/action/protocol/poll"
-	"github.com/iotexproject/iotex-core/action/protocol/rewarding/rewardingpb"
-	"github.com/iotexproject/iotex-core/action/protocol/rolldpos"
-	"github.com/iotexproject/iotex-core/pkg/enc"
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/state"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	accountutil "github.com/iotexproject/iotex-core/v2/action/protocol/account/util"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/poll"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rewarding/rewardingpb"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rolldpos"
+	"github.com/iotexproject/iotex-core/v2/pkg/enc"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/state"
 )
 
 // rewardHistory is the dummy struct to record a reward. Only key matters.
@@ -100,26 +100,38 @@ func (p *Protocol) GrantBlockReward(
 	if err != nil {
 		return nil, err
 	}
-
-	a := admin{}
-	if _, err := p.state(ctx, sm, _adminKey, &a); err != nil {
+	totalReward, blockReward, effectiveTip, err := p.calculateTotalRewardAndTip(ctx, sm)
+	if err != nil {
 		return nil, err
 	}
-	if err := p.updateAvailableBalance(ctx, sm, a.blockReward); err != nil {
+	if err := p.updateAvailableBalance(ctx, sm, totalReward); err != nil {
 		return nil, err
 	}
-	if err := p.grantToAccount(ctx, sm, rewardAddr, a.blockReward); err != nil {
+	if err := p.grantToAccount(ctx, sm, rewardAddr, totalReward); err != nil {
 		return nil, err
 	}
 	if err := p.updateRewardHistory(ctx, sm, _blockRewardHistoryKeyPrefix, blkCtx.BlockHeight); err != nil {
 		return nil, err
 	}
-	rewardLog := rewardingpb.RewardLog{
-		Type:   rewardingpb.RewardLog_BLOCK_REWARD,
-		Addr:   rewardAddrStr,
-		Amount: a.blockReward.String(),
+	var (
+		rewardLogs = []*rewardingpb.RewardLog{
+			{
+				Type:   rewardingpb.RewardLog_BLOCK_REWARD,
+				Addr:   rewardAddrStr,
+				Amount: blockReward.String(),
+			},
+		}
+		msg proto.Message = rewardLogs[0]
+	)
+	if !isZero(effectiveTip) {
+		rewardLogs = append(rewardLogs, &rewardingpb.RewardLog{
+			Type:   rewardingpb.RewardLog_PRIORITY_BONUS,
+			Addr:   rewardAddrStr,
+			Amount: effectiveTip.String(),
+		})
+		msg = &rewardingpb.RewardLogs{Logs: rewardLogs}
 	}
-	data, err := proto.Marshal(&rewardLog)
+	data, err := proto.Marshal(msg)
 	if err != nil {
 		return nil, err
 	}
@@ -277,22 +289,22 @@ func (p *Protocol) Claim(
 	ctx context.Context,
 	sm protocol.StateManager,
 	amount *big.Int,
+	claimFrom address.Address,
 ) (*action.TransactionLog, error) {
-	actionCtx := protocol.MustGetActionCtx(ctx)
 	if err := p.assertAmount(amount); err != nil {
 		return nil, err
 	}
 	if err := p.updateTotalBalance(ctx, sm, amount); err != nil {
 		return nil, err
 	}
-	if err := p.claimFromAccount(ctx, sm, actionCtx.Caller, amount); err != nil {
+	if err := p.claimFromAccount(ctx, sm, claimFrom, amount); err != nil {
 		return nil, err
 	}
 
 	return &action.TransactionLog{
 		Type:      iotextypes.TransactionLogType_CLAIM_FROM_REWARDING_FUND,
 		Sender:    address.RewardingPoolAddr,
-		Recipient: actionCtx.Caller.String(),
+		Recipient: claimFrom.String(),
 		Amount:    amount,
 	}, nil
 }
@@ -402,6 +414,34 @@ func (p *Protocol) claimFromAccount(ctx context.Context, sm protocol.StateManage
 	return accountutil.StoreAccount(sm, addr, primAcc)
 }
 
+func (p *Protocol) calculateTotalRewardAndTip(ctx context.Context, sm protocol.StateManager) (*big.Int, *big.Int, *big.Int, error) {
+	a := admin{}
+	if _, err := p.state(ctx, sm, _adminKey, &a); err != nil {
+		return nil, nil, nil, err
+	}
+	var (
+		blkCtx       = protocol.MustGetBlockCtx(ctx)
+		featureCtx   = protocol.MustGetFeatureCtx(ctx)
+		totalReward  = &big.Int{}
+		blockReward  = (&big.Int{}).Set(a.blockReward)
+		effectiveTip = &big.Int{}
+	)
+	if featureCtx.MakeUpBlockReward {
+		effectiveTip.Set(&blkCtx.AccumulatedTips)
+		if blkCtx.AccumulatedTips.Cmp(blockReward) >= 0 {
+			blockReward.SetUint64(0)
+		} else {
+			blockReward.Sub(blockReward, &blkCtx.AccumulatedTips)
+		}
+	} else if featureCtx.EnableDynamicFeeTx {
+		if blkCtx.AccumulatedTips.Sign() > 0 {
+			effectiveTip.Set(&blkCtx.AccumulatedTips)
+		}
+	}
+	totalReward.Add(blockReward, effectiveTip)
+	return totalReward, blockReward, effectiveTip, nil
+}
+
 func (p *Protocol) updateRewardHistory(ctx context.Context, sm protocol.StateManager, prefix []byte, index uint64) error {
 	var indexBytes [8]byte
 	enc.MachineEndian.PutUint64(indexBytes[:], index)
@@ -486,4 +526,24 @@ func (p *Protocol) assertLastBlockInEpoch(blkHeight uint64, epochNum uint64, rp 
 		return errors.Errorf("current block %d is not the last block of epoch %d", blkHeight, epochNum)
 	}
 	return nil
+}
+
+// UnmarshalRewardLog unmarshals reward log from byte slice
+// it keep the compatibility with old reward log
+func UnmarshalRewardLog(data []byte) (*rewardingpb.RewardLogs, error) {
+	logs := rewardingpb.RewardLogs{}
+	if err := proto.Unmarshal(data, &logs); err != nil {
+		return nil, err
+	}
+	if len(logs.Logs) == 0 {
+		// compatibility with old reward log
+		log := rewardingpb.RewardLog{}
+		if err := proto.Unmarshal(data, &log); err != nil {
+			return nil, err
+		}
+		logs = rewardingpb.RewardLogs{
+			Logs: []*rewardingpb.RewardLog{&log},
+		}
+	}
+	return &logs, nil
 }

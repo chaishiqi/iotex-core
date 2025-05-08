@@ -11,11 +11,11 @@ import (
 	"github.com/iotexproject/go-pkgs/hash"
 	"github.com/pkg/errors"
 
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/db/trie"
-	"github.com/iotexproject/iotex-core/db/trie/mptrie"
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/state"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/db/trie"
+	"github.com/iotexproject/iotex-core/v2/db/trie/mptrie"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/state"
 )
 
 const (
@@ -59,7 +59,7 @@ func (c *contract) Iterator() (trie.Iterator, error) {
 	return mptrie.NewLeafIterator(c.trie)
 }
 
-// GetState get the committed value of a key
+// GetCommittedState get the committed value of a key
 func (c *contract) GetCommittedState(key hash.Hash256) ([]byte, error) {
 	if v, ok := c.committed[key]; ok {
 		return v, nil

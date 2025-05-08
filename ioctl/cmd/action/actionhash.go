@@ -13,7 +13,6 @@ import (
 	"math/big"
 	"strconv"
 
-	protoV1 "github.com/golang/protobuf/proto"
 	"github.com/grpc-ecosystem/go-grpc-middleware/util/metautils"
 	"github.com/iotexproject/go-pkgs/crypto"
 	"github.com/iotexproject/iotex-proto/golang/iotexapi"
@@ -21,12 +20,13 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	protoV1 "google.golang.org/protobuf/proto"
 
-	"github.com/iotexproject/iotex-core/action/protocol/staking"
-	"github.com/iotexproject/iotex-core/ioctl/cmd/alias"
-	"github.com/iotexproject/iotex-core/ioctl/config"
-	"github.com/iotexproject/iotex-core/ioctl/output"
-	"github.com/iotexproject/iotex-core/ioctl/util"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/staking"
+	"github.com/iotexproject/iotex-core/v2/ioctl/cmd/alias"
+	"github.com/iotexproject/iotex-core/v2/ioctl/config"
+	"github.com/iotexproject/iotex-core/v2/ioctl/output"
+	"github.com/iotexproject/iotex-core/v2/ioctl/util"
 )
 
 // Multi-language support
@@ -156,8 +156,8 @@ func printAction(actionInfo *iotexapi.ActionInfo) (string, error) {
 	return result, nil
 }
 
-func printActionProto(action *iotextypes.Action) (string, error) {
-	pubKey, err := crypto.BytesToPublicKey(action.SenderPubKey)
+func printActionProto(act *iotextypes.Action) (string, error) {
+	pubKey, err := crypto.BytesToPublicKey(act.SenderPubKey)
 	if err != nil {
 		return "", output.NewError(output.ConvertError, "failed to convert public key from bytes", err)
 	}
@@ -166,19 +166,55 @@ func printActionProto(action *iotextypes.Action) (string, error) {
 		return "", output.NewError(output.ConvertError, "failed to convert bytes into address", nil)
 	}
 	//ioctl action should display IOTX unit instead Raul
-	core := action.Core
-	gasPriceUnitIOTX, err := util.StringToIOTX(core.GasPrice)
-	if err != nil {
-		return "", output.NewError(output.ConfigError, "failed to convert string to IOTX", err)
-	}
+	core := act.Core
 	result := fmt.Sprintf("\nversion: %d  ", core.GetVersion()) +
+		fmt.Sprintf("txType: %d  ", core.GetTxType()) +
 		fmt.Sprintf("nonce: %d  ", core.GetNonce()) +
 		fmt.Sprintf("gasLimit: %d  ", core.GasLimit) +
-		fmt.Sprintf("gasPrice: %s IOTX  ", gasPriceUnitIOTX) +
 		fmt.Sprintf("chainID: %d  ", core.GetChainID()) +
-		fmt.Sprintf("encoding: %d\n", action.GetEncoding()) +
+		fmt.Sprintf("encoding: %d\n", act.GetEncoding()) +
 		fmt.Sprintf("senderAddress: %s %s\n", senderAddress.String(),
 			Match(senderAddress.String(), "address"))
+	if len(core.GasPrice) > 0 {
+		gasPriceUnitIOTX, err := util.StringToIOTX(core.GasPrice)
+		if err != nil {
+			return "", output.NewError(output.ConfigError, "failed to convert string to IOTX", err)
+		}
+		result += fmt.Sprintf("gasPrice: %s IOTX \n", gasPriceUnitIOTX)
+	}
+	if len(core.GetGasFeeCap()) > 0 {
+		feeCapIOTX, err := util.StringToIOTX(core.GetGasFeeCap())
+		if err != nil {
+			return "", output.NewError(output.ConfigError, "failed to convert string to IOTX", err)
+		}
+		tipCapIOTX, err := util.StringToIOTX(core.GetGasTipCap())
+		if err != nil {
+			return "", output.NewError(output.ConfigError, "failed to convert string to IOTX", err)
+		}
+		result += fmt.Sprintf("gasFeeCap: %s IOTX ", feeCapIOTX) +
+			fmt.Sprintf("gasTipCap: %s IOTX \n", tipCapIOTX)
+	}
+	if len(core.GetAccessList()) > 0 {
+		result += "accessList: <\n"
+		for _, access := range core.GetAccessList() {
+			result += fmt.Sprintf("  address: %s %s\n", access.Address,
+				Match(access.Address, "address"))
+			result += "  storageKeys: <\n"
+			for _, key := range access.StorageKeys {
+				result += fmt.Sprintf("    %s\n", key)
+			}
+			result += "  >\n"
+		}
+		result += ">\n"
+	}
+	if core.BlobTxData != nil {
+		result += fmt.Sprintf("blob hashes: <\n")
+		for _, hash := range core.BlobTxData.BlobHashes {
+			result += fmt.Sprintf("  %x\n", hash)
+		}
+		result += ">\n"
+	}
+
 	switch {
 	case core.GetTransfer() != nil:
 		transfer := core.GetTransfer()
@@ -223,10 +259,11 @@ func printActionProto(action *iotextypes.Action) (string, error) {
 		result += "  >\n" +
 			">\n"
 	default:
-		result += protoV1.MarshalTextString(core)
+		bs, _ := protoV1.Marshal(core)
+		result += string(bs)
 	}
-	result += fmt.Sprintf("senderPubKey: %x\n", action.SenderPubKey) +
-		fmt.Sprintf("signature: %x\n", action.Signature)
+	result += fmt.Sprintf("senderPubKey: %x\n", act.SenderPubKey) +
+		fmt.Sprintf("signature: %x\n", act.Signature)
 
 	return result, nil
 }
@@ -236,8 +273,27 @@ func printReceiptProto(receipt *iotextypes.Receipt) string {
 		Match(strconv.Itoa(int(receipt.Status)), "status")) +
 		fmt.Sprintf("actHash: %x\n", receipt.ActHash) +
 		fmt.Sprintf("blkHeight: %d\n", receipt.BlkHeight) +
-		fmt.Sprintf("gasConsumed: %d\n", receipt.GasConsumed) +
-		printLogs(receipt.Logs)
+		fmt.Sprintf("gasConsumed: %d\n", receipt.GasConsumed)
+	if receipt.BlobGasUsed > 0 {
+		result += fmt.Sprintf("blobGasUsed: %d\n", receipt.BlobGasUsed)
+	}
+	if len(receipt.BlobGasPrice) > 0 {
+		blobGasPrice, err := util.StringToIOTX(receipt.BlobGasPrice)
+		if err != nil {
+			result += fmt.Sprintf("blobGasPrice: %s \n", receipt.BlobGasPrice)
+		} else {
+			result += fmt.Sprintf("blobGasPrice: %s IOTX\n", blobGasPrice)
+		}
+	}
+	if len(receipt.EffectiveGasPrice) > 0 {
+		effectiveGasPrice, err := util.StringToIOTX(receipt.EffectiveGasPrice)
+		if err != nil {
+			result += fmt.Sprintf("effectiveGasPrice: %s \n", receipt.EffectiveGasPrice)
+		} else {
+			result += fmt.Sprintf("effectiveGasPrice: %s IOTX\n", effectiveGasPrice)
+		}
+	}
+	result += printLogs(receipt.Logs)
 	if len(receipt.ContractAddress) != 0 {
 		result += fmt.Sprintf("\ncontractAddress: %s %s", receipt.ContractAddress,
 			Match(receipt.ContractAddress, "address"))

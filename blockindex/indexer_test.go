@@ -16,12 +16,12 @@ import (
 
 	"github.com/iotexproject/go-pkgs/hash"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/testutil"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/testutil"
 )
 
 func getTestBlocks(t *testing.T) []*block.Block {
@@ -156,7 +156,7 @@ func TestIndexer(t *testing.T) {
 	}
 
 	testIndexer := func(kvStore db.KVStore, t *testing.T) {
-		ctx := genesis.WithGenesisContext(context.Background(), genesis.Default)
+		ctx := genesis.WithGenesisContext(context.Background(), genesis.TestDefault())
 		indexer, err := NewIndexer(kvStore, hash.ZeroHash256)
 		require.NoError(err)
 		require.NoError(indexer.Start(ctx))
@@ -241,7 +241,7 @@ func TestIndexer(t *testing.T) {
 	}
 
 	testDelete := func(kvStore db.KVStore, t *testing.T) {
-		ctx := genesis.WithGenesisContext(context.Background(), genesis.Default)
+		ctx := genesis.WithGenesisContext(context.Background(), genesis.TestDefault())
 		indexer, err := NewIndexer(kvStore, hash.ZeroHash256)
 		require.NoError(err)
 		require.NoError(indexer.Start(ctx))
@@ -258,54 +258,6 @@ func TestIndexer(t *testing.T) {
 			require.NoError(err)
 			require.EqualValues(len(indexTests[0].actions[i].hashes), actionCount)
 		}
-
-		// delete tip block one by one, verify address/action after each deletion
-		for i := range indexTests {
-			if i == 0 {
-				// tests[0] is the whole address/action data at block height 3
-				continue
-			}
-
-			require.NoError(indexer.DeleteTipBlock(ctx, blks[3-i]))
-			tipHeight, err := indexer.Height()
-			require.NoError(err)
-			require.EqualValues(uint64(3-i), tipHeight)
-			h, err := indexer.GetBlockHash(tipHeight)
-			require.NoError(err)
-			if i <= 2 {
-				require.Equal(blks[2-i].HashBlock(), h)
-			} else {
-				require.Equal(hash.ZeroHash256, h)
-			}
-
-			total, err := indexer.GetTotalActions()
-			require.NoError(err)
-			require.EqualValues(indexTests[i].total, total)
-			if total > 0 {
-				_, err = indexer.GetActionHashFromIndex(1, total)
-				require.Equal(db.ErrInvalid, errors.Cause(err))
-				actions, err := indexer.GetActionHashFromIndex(0, total)
-				require.NoError(err)
-				require.Equal(actions, indexTests[i].hashTotal)
-			}
-			for j := range indexTests[i].actions {
-				actionCount, err := indexer.GetActionCountByAddress(indexTests[i].actions[j].addr)
-				require.NoError(err)
-				require.EqualValues(len(indexTests[i].actions[j].hashes), actionCount)
-				if actionCount > 0 {
-					actions, err := indexer.GetActionsByAddress(indexTests[i].actions[j].addr, 0, actionCount)
-					require.NoError(err)
-					require.Equal(actions, indexTests[i].actions[j].hashes)
-				}
-			}
-		}
-
-		tipHeight, err := indexer.Height()
-		require.NoError(err)
-		require.EqualValues(0, tipHeight)
-		total, err := indexer.GetTotalActions()
-		require.NoError(err)
-		require.EqualValues(0, total)
 	}
 
 	t.Run("In-memory KV indexer", func(t *testing.T) {

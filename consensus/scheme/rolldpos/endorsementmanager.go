@@ -13,11 +13,11 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/consensus/scheme/rolldpos/endorsementpb"
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/endorsement"
-	"github.com/iotexproject/iotex-core/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/consensus/scheme/rolldpos/endorsementpb"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/endorsement"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
 )
 
 const (
@@ -60,11 +60,7 @@ func (ee *endorserEndorsementCollection) toProto(endorser string) (*endorsementp
 	eeProto.Endorser = endorser
 	for topic, endorse := range ee.endorsements {
 		eeProto.Topics = append(eeProto.Topics, uint32(topic))
-		ioEndorsement, err := endorse.Proto()
-		if err != nil {
-			return nil, err
-		}
-		eeProto.Endorsements = append(eeProto.Endorsements, ioEndorsement)
+		eeProto.Endorsements = append(eeProto.Endorsements, endorse.Proto())
 	}
 	return eeProto, nil
 }

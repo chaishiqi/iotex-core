@@ -8,10 +8,10 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/iotexproject/go-pkgs/hash"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/state"
-	"github.com/iotexproject/iotex-core/test/mock/mock_chainmanager"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/state"
+	"github.com/iotexproject/iotex-core/v2/test/mock/mock_chainmanager"
 )
 
 // NewMockKVStore returns a in memory KVStore.
@@ -125,8 +125,7 @@ func NewMockStateManager(ctrl *gomock.Controller) *mock_chainmanager.MockStateMa
 func NewMockStateManagerWithoutHeightFunc(ctrl *gomock.Controller) *mock_chainmanager.MockStateManager {
 	sm := mock_chainmanager.NewMockStateManager(ctrl)
 	kv := NewMockKVStore(ctrl)
-	dk := protocol.NewDock()
-	view := protocol.View{}
+	views := protocol.NewViews()
 	sm.EXPECT().State(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(s interface{}, opts ...protocol.StateOption) (uint64, error) {
 			cfg, err := protocol.CreateStateConfig(opts...)
@@ -176,9 +175,10 @@ func NewMockStateManagerWithoutHeightFunc(ctrl *gomock.Controller) *mock_chainma
 			if err != nil {
 				return 0, nil, err
 			}
+			var fk [][]byte
 			var fv [][]byte
 			if cfg.Keys == nil {
-				_, fv, err = kv.Filter(cfg.Namespace, func(k, v []byte) bool {
+				fk, fv, err = kv.Filter(cfg.Namespace, func(k, v []byte) bool {
 					return true
 				}, nil, nil)
 				if err != nil {
@@ -190,45 +190,40 @@ func NewMockStateManagerWithoutHeightFunc(ctrl *gomock.Controller) *mock_chainma
 					switch errors.Cause(err) {
 					case db.ErrNotExist, db.ErrBucketNotExist:
 						fv = append(fv, nil)
+						fk = append(fk, key)
 					case nil:
 						fv = append(fv, value)
+						fk = append(fk, key)
 					default:
 						return 0, nil, err
 					}
 				}
 			}
-			return 0, state.NewIterator(fv), nil
+			iter, err := state.NewIterator(fk, fv)
+			if err != nil {
+				return 0, nil, err
+			}
+			return 0, iter, nil
 		},
 	).AnyTimes()
 	// sm.EXPECT().Height().Return(uint64(0), nil).AnyTimes()
-	sm.EXPECT().Load(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(ns, key string, v interface{}) error {
-			return dk.Load(ns, key, v)
-		},
-	).AnyTimes()
-	sm.EXPECT().Unload(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(ns, key string, v interface{}) error {
-			return dk.Unload(ns, key, v)
-		},
-	).AnyTimes()
 	sm.EXPECT().ReadView(gomock.Any()).DoAndReturn(
 		func(name string) (interface{}, error) {
-			if v, hit := view[name]; hit {
+			if v, err := views.Read(name); err == nil {
 				return v, nil
 			}
 			return nil, protocol.ErrNoName
 		},
 	).AnyTimes()
 	sm.EXPECT().WriteView(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(name string, v interface{}) error {
-			view[name] = v
+		func(name string, v protocol.View) error {
+			views.Write(name, v)
 			return nil
 		},
 	).AnyTimes()
 	// use Snapshot() to simulate workingset.Reset()
 	sm.EXPECT().Snapshot().DoAndReturn(
 		func() int {
-			dk.Reset()
 			return 0
 		},
 	).AnyTimes()

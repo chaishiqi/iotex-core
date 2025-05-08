@@ -12,7 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libp2p/go-libp2p-core/peer"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/mohae/deepcopy"
 	"github.com/multiformats/go-multiaddr"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -20,26 +21,26 @@ import (
 	"github.com/iotexproject/go-pkgs/crypto"
 	"github.com/iotexproject/go-pkgs/hash"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/account"
-	accountutil "github.com/iotexproject/iotex-core/action/protocol/account/util"
-	"github.com/iotexproject/iotex-core/action/protocol/rewarding"
-	"github.com/iotexproject/iotex-core/action/protocol/rolldpos"
-	"github.com/iotexproject/iotex-core/actpool"
-	"github.com/iotexproject/iotex-core/blockchain"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/blockdao"
-	"github.com/iotexproject/iotex-core/blockchain/filedao"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/config"
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/p2p"
-	"github.com/iotexproject/iotex-core/pkg/unit"
-	"github.com/iotexproject/iotex-core/server/itx"
-	"github.com/iotexproject/iotex-core/state/factory"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/testutil"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/account"
+	accountutil "github.com/iotexproject/iotex-core/v2/action/protocol/account/util"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rewarding"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rolldpos"
+	"github.com/iotexproject/iotex-core/v2/actpool"
+	"github.com/iotexproject/iotex-core/v2/blockchain"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/blockdao"
+	"github.com/iotexproject/iotex-core/v2/blockchain/filedao"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/config"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/p2p"
+	"github.com/iotexproject/iotex-core/v2/pkg/unit"
+	"github.com/iotexproject/iotex-core/v2/server/itx"
+	"github.com/iotexproject/iotex-core/v2/state/factory"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/testutil"
 )
 
 const (
@@ -47,6 +48,7 @@ const (
 	_dBPath2    = "db.test2"
 	_triePath   = "trie.test"
 	_triePath2  = "trie.test2"
+	_blobPath   = "blob.test"
 	_disabledIP = "169.254."
 )
 
@@ -55,29 +57,14 @@ func TestLocalCommit(t *testing.T) {
 
 	cfg, err := newTestConfig()
 	require.NoError(err)
-	testTriePath, err := testutil.PathOfTempFile(_triePath)
-	require.NoError(err)
-	testDBPath, err := testutil.PathOfTempFile(_dBPath)
-	require.NoError(err)
-	indexDBPath, err := testutil.PathOfTempFile(_dBPath)
-	require.NoError(err)
-	contractIndexDBPath, err := testutil.PathOfTempFile(_dBPath)
-	require.NoError(err)
-	indexSGDDBPath, err := testutil.PathOfTempFile(_dBPath + "_sgd")
-	require.NoError(err)
-	cfg.Chain.TrieDBPatchFile = ""
-	cfg.Chain.TrieDBPath = testTriePath
-	cfg.Chain.ChainDBPath = testDBPath
-	cfg.Chain.IndexDBPath = indexDBPath
-	cfg.Chain.ContractStakingIndexDBPath = contractIndexDBPath
-	cfg.Chain.SGDIndexDBPath = indexSGDDBPath
+	initDBPaths(require, &cfg)
 	defer func() {
-		testutil.CleanupPath(testTriePath)
-		testutil.CleanupPath(testDBPath)
-		testutil.CleanupPath(indexDBPath)
-		testutil.CleanupPath(contractIndexDBPath)
-		testutil.CleanupPath(indexSGDDBPath)
+		clearDBPaths(&cfg)
 	}()
+	testTriePath := cfg.Chain.TrieDBPath
+	testDBPath := cfg.Chain.ChainDBPath
+	indexDBPath := cfg.Chain.IndexDBPath
+	cfg.ActPool.Store = nil
 
 	// create server
 	ctx := genesis.WithGenesisContext(context.Background(), cfg.Genesis)
@@ -127,6 +114,7 @@ func TestLocalCommit(t *testing.T) {
 	// create client
 	cfg, err = newTestConfig()
 	require.NoError(err)
+	initDBPaths(require, &cfg)
 	addrs, err := svr.P2PAgent().Self()
 	require.NoError(err)
 	cfg.Network.BootstrapNodes = []string{validNetworkAddr(addrs)}
@@ -134,6 +122,9 @@ func TestLocalCommit(t *testing.T) {
 		cfg.Network,
 		cfg.Chain.ID,
 		cfg.Genesis.Hash(),
+		func(proto.Message) (bool, error) {
+			return false, nil
+		},
 		func(_ context.Context, _ uint32, _ string, _ proto.Message) {
 		},
 		func(_ context.Context, _ uint32, _ peer.AddrInfo, _ proto.Message) {
@@ -327,28 +318,9 @@ func TestLocalSync(t *testing.T) {
 
 	cfg, err := newTestConfig()
 	require.NoError(err)
-	testTriePath, err := testutil.PathOfTempFile(_triePath)
-	require.NoError(err)
-	testDBPath, err := testutil.PathOfTempFile(_dBPath)
-	require.NoError(err)
-	indexDBPath, err := testutil.PathOfTempFile(_dBPath)
-	require.NoError(err)
-	contractIndexDBPath, err := testutil.PathOfTempFile(_dBPath)
-	require.NoError(err)
-	indexSGDDBPath, err := testutil.PathOfTempFile(_dBPath + "_sgd")
-	require.NoError(err)
-	cfg.Chain.TrieDBPatchFile = ""
-	cfg.Chain.TrieDBPath = testTriePath
-	cfg.Chain.ChainDBPath = testDBPath
-	cfg.Chain.IndexDBPath = indexDBPath
-	cfg.Chain.ContractStakingIndexDBPath = contractIndexDBPath
-	cfg.Chain.SGDIndexDBPath = indexSGDDBPath
+	initDBPaths(require, &cfg)
 	defer func() {
-		testutil.CleanupPath(testTriePath)
-		testutil.CleanupPath(testDBPath)
-		testutil.CleanupPath(indexDBPath)
-		testutil.CleanupPath(contractIndexDBPath)
-		testutil.CleanupPath(indexSGDDBPath)
+		clearDBPaths(&cfg)
 	}()
 
 	// bootnode
@@ -360,6 +332,9 @@ func TestLocalSync(t *testing.T) {
 		ReconnectInterval: 150 * time.Second},
 		cfg.Chain.ID,
 		hash.ZeroHash256,
+		func(proto.Message) (bool, error) {
+			return false, nil
+		},
 		func(_ context.Context, _ uint32, _ string, msg proto.Message) {},
 		func(_ context.Context, _ uint32, _ peer.AddrInfo, _ proto.Message) {})
 	require.NoError(bootnode.Start(ctx))
@@ -397,24 +372,27 @@ func TestLocalSync(t *testing.T) {
 	require.NoError(err)
 	indexDBPath2, err := testutil.PathOfTempFile(_dBPath2)
 	require.NoError(err)
+	blobIndexPath, err := testutil.PathOfTempFile(_blobPath)
+	require.NoError(err)
 	contractIndexDBPath2, err := testutil.PathOfTempFile(_dBPath2)
 	require.NoError(err)
-	indexSGDDBPath2, err := testutil.PathOfTempFile(_dBPath2 + "_sgd")
-	require.NoError(err)
+
 	cfg, err = newTestConfig()
 	require.NoError(err)
+	initDBPaths(require, &cfg)
 	cfg.Chain.TrieDBPatchFile = ""
+	cfg.Chain.BlobStoreDBPath = ""
 	cfg.Chain.TrieDBPath = testTriePath2
 	cfg.Chain.ChainDBPath = testDBPath2
 	cfg.Chain.IndexDBPath = indexDBPath2
+	cfg.Chain.BlobStoreDBPath = blobIndexPath
 	cfg.Chain.ContractStakingIndexDBPath = contractIndexDBPath2
-	cfg.Chain.SGDIndexDBPath = indexSGDDBPath2
 	defer func() {
 		testutil.CleanupPath(testTriePath2)
 		testutil.CleanupPath(testDBPath2)
 		testutil.CleanupPath(indexDBPath2)
+		testutil.CleanupPath(blobIndexPath)
 		testutil.CleanupPath(contractIndexDBPath2)
-		testutil.CleanupPath(indexSGDDBPath2)
 	}()
 
 	// Create client
@@ -465,17 +443,20 @@ func TestStartExistingBlockchain(t *testing.T) {
 	require.NoError(err)
 	testContractStakeIndexPath, err := testutil.PathOfTempFile(_dBPath)
 	require.NoError(err)
-	testSGDIndexPath, err := testutil.PathOfTempFile(_dBPath + "_sgd")
+	testBlobIndexPath, err := testutil.PathOfTempFile(_blobPath)
 	require.NoError(err)
 	// Disable block reward to make bookkeeping easier
 	cfg := config.Default
 	cfg.Chain.TrieDBPatchFile = ""
+	cfg.Chain.BlobStoreDBPath = ""
 	cfg.Chain.TrieDBPath = testTriePath
 	cfg.Chain.ChainDBPath = testDBPath
 	cfg.Chain.IndexDBPath = testIndexPath
+	cfg.Chain.BlobStoreDBPath = testBlobIndexPath
 	cfg.Chain.ContractStakingIndexDBPath = testContractStakeIndexPath
-	cfg.Chain.SGDIndexDBPath = testSGDIndexPath
 	cfg.Chain.EnableAsyncIndexWrite = false
+	cfg.ActPool.Store = nil
+	cfg.Genesis = genesis.TestDefault()
 	cfg.ActPool.MinGasPriceStr = "0"
 	cfg.Consensus.Scheme = config.NOOPScheme
 	cfg.Network.Port = testutil.RandomPort()
@@ -495,8 +476,8 @@ func TestStartExistingBlockchain(t *testing.T) {
 		testutil.CleanupPath(testTriePath)
 		testutil.CleanupPath(testDBPath)
 		testutil.CleanupPath(testIndexPath)
+		testutil.CleanupPath(testBlobIndexPath)
 		testutil.CleanupPath(testContractStakeIndexPath)
-		testutil.CleanupPath(testSGDIndexPath)
 	}()
 
 	require.NoError(addTestingTsfBlocks(bc, ap))
@@ -536,7 +517,6 @@ func TestStartExistingBlockchain(t *testing.T) {
 	// Build states from height 1 to 3
 	testutil.CleanupPath(testTriePath)
 	testutil.CleanupPath(testContractStakeIndexPath)
-	testutil.CleanupPath(testSGDIndexPath)
 	svr, err = itx.NewServer(cfg)
 	require.NoError(err)
 	require.NoError(svr.Start(ctx))
@@ -566,7 +546,6 @@ func TestStartExistingBlockchain(t *testing.T) {
 	require.NoError(dao.Stop(ctx))
 	testutil.CleanupPath(testTriePath)
 	testutil.CleanupPath(testContractStakeIndexPath)
-	testutil.CleanupPath(testSGDIndexPath)
 	svr, err = itx.NewServer(cfg)
 	require.NoError(err)
 	// Build states from height 1 to 2
@@ -580,8 +559,12 @@ func TestStartExistingBlockchain(t *testing.T) {
 
 func newTestConfig() (config.Config, error) {
 	cfg := config.Default
+	cfg = deepcopy.Copy(cfg).(config.Config)
+	cfg.Genesis = genesis.TestDefault()
 	cfg.Chain.TrieDBPath = _triePath
 	cfg.Chain.ChainDBPath = _dBPath
+	cfg.Chain.BlobStoreDBPath = _blobPath
+	cfg.Chain.MintTimeout = 0
 	cfg.ActPool.MinGasPriceStr = "0"
 	cfg.Consensus.Scheme = config.NOOPScheme
 	cfg.Network.Port = testutil.RandomPort()

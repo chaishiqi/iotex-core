@@ -24,14 +24,14 @@ import (
 	"go.uber.org/automaxprocs/maxprocs"
 	"go.uber.org/zap"
 
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/config"
-	"github.com/iotexproject/iotex-core/db/trie/mptrie"
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/pkg/probe"
-	"github.com/iotexproject/iotex-core/pkg/recovery"
-	"github.com/iotexproject/iotex-core/server/itx"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/config"
+	"github.com/iotexproject/iotex-core/v2/db/trie/mptrie"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/pkg/probe"
+	"github.com/iotexproject/iotex-core/v2/pkg/recovery"
+	"github.com/iotexproject/iotex-core/v2/server/itx"
 )
 
 /**
@@ -180,8 +180,12 @@ func main() {
 }
 
 func initLogger(cfg config.Config) error {
-	addr := cfg.Chain.ProducerAddress()
+	addrs := cfg.Chain.ProducerAddress()
+	ss := []string{}
+	for _, addr := range addrs {
+		ss = append(ss, addr.String())
+	}
 	return log.InitLoggers(cfg.Log, cfg.SubLogs, zap.AddCaller(), zap.Fields(
-		zap.String("ioAddr", addr.String()),
+		zap.String("ioAddr", strings.Join(ss, ",")),
 	))
 }

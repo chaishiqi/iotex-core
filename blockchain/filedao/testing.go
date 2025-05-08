@@ -18,13 +18,13 @@ import (
 	"github.com/iotexproject/go-pkgs/hash"
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/db/batch"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/testutil"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/db/batch"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/testutil"
 )
 
 var _defaultEVMNetworkID uint32 = 4689
@@ -66,10 +66,10 @@ func newFileDAOv2InMem(bottom uint64) (*fileDAOv2, error) {
 		tip: &FileTip{
 			Height: bottom - 1,
 		},
-		blkCache: cache.NewThreadSafeLruCache(16),
-		kvStore:  db.NewMemKVStore(),
-		batch:    batch.NewBatch(),
-		deser:    block.NewDeserializer(_defaultEVMNetworkID),
+		blkStorePbCache: cache.NewThreadSafeLruCache(16),
+		kvStore:         db.NewMemKVStore(),
+		batch:           batch.NewBatch(),
+		deser:           block.NewDeserializer(_defaultEVMNetworkID),
 	}
 	return &fd, nil
 }
@@ -224,7 +224,8 @@ func testVerifyChainDB(t *testing.T, fd FileDAO, start, end uint64) {
 }
 
 func createTestingBlock(builder *block.TestingBuilder, height uint64, h hash.Hash256) *block.Block {
-	block.LoadGenesisHash(&genesis.Default)
+	g := genesis.TestDefault()
+	block.LoadGenesisHash(&g)
 	r := &action.Receipt{
 		Status:      1,
 		BlockHeight: height,

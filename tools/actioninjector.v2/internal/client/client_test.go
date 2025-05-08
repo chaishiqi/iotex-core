@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math/big"
 	"testing"
-	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
@@ -15,19 +14,20 @@ import (
 	"github.com/iotexproject/go-pkgs/hash"
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/api"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockindex"
-	"github.com/iotexproject/iotex-core/config"
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/state"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/test/mock/mock_actpool"
-	"github.com/iotexproject/iotex-core/test/mock/mock_blockchain"
-	"github.com/iotexproject/iotex-core/test/mock/mock_factory"
-	"github.com/iotexproject/iotex-core/testutil"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/api"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/blockindex"
+	"github.com/iotexproject/iotex-core/v2/config"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/state"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/test/mock/mock_actpool"
+	"github.com/iotexproject/iotex-core/v2/test/mock/mock_blockchain"
+	"github.com/iotexproject/iotex-core/v2/test/mock/mock_factory"
+	"github.com/iotexproject/iotex-core/v2/testutil"
 )
 
 func TestClient(t *testing.T) {
@@ -37,6 +37,7 @@ func TestClient(t *testing.T) {
 	b := identityset.Address(29).String()
 
 	cfg := config.Default
+	cfg.Genesis = genesis.TestDefault()
 	cfg.API.GRPCPort = testutil.RandomPort()
 	cfg.API.HTTPPort = testutil.RandomPort()
 	cfg.API.WebSocketPort = testutil.RandomPort()
@@ -45,10 +46,8 @@ func TestClient(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
 
-	tx, err := action.NewTransfer(uint64(1), big.NewInt(10), b, nil, uint64(0), big.NewInt(0))
-	require.NoError(err)
-	bd := &action.EnvelopeBuilder{}
-	elp := bd.SetNonce(1).SetAction(tx).Build()
+	tx := action.NewTransfer(big.NewInt(10), b, nil)
+	elp := (&action.EnvelopeBuilder{}).SetNonce(1).SetAction(tx).Build()
 	selp, err := action.Sign(elp, priKeyA)
 	require.NoError(err)
 
@@ -78,6 +77,7 @@ func TestClient(t *testing.T) {
 	bc.EXPECT().BlockHeaderByHeight(gomock.Any()).Return(&blh, nil).AnyTimes()
 	ap.EXPECT().GetPendingNonce(gomock.Any()).Return(uint64(1), nil).AnyTimes()
 	ap.EXPECT().Add(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	ap.EXPECT().AddSubscriber(gomock.Any()).AnyTimes()
 	newOption := api.WithBroadcastOutbound(func(_ context.Context, _ uint32, _ proto.Message) error {
 		return nil
 	})
@@ -85,7 +85,7 @@ func TestClient(t *testing.T) {
 	require.NoError(err)
 	bfIndexer, err := blockindex.NewBloomfilterIndexer(db.NewMemKVStore(), cfg.Indexer)
 	require.NoError(err)
-	apiServer, err := api.NewServerV2(cfg.API, bc, nil, sf, nil, indexer, bfIndexer, ap, nil, func(u uint64) (time.Time, error) { return time.Time{}, nil }, newOption)
+	apiServer, err := api.NewServerV2(cfg.API, bc, nil, sf, nil, indexer, bfIndexer, ap, nil, nil, newOption)
 	require.NoError(err)
 	require.NoError(apiServer.Start(ctx))
 	// test New()

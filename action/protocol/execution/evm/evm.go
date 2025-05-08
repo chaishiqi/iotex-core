@@ -1,4 +1,4 @@
-// Copyright (c) 2019 IoTeX Foundation
+// Copyright (c) 2024 IoTeX Foundation
 // This source code is provided 'as is' and no warranties are given as to title or non-infringement, merchantability
 // or fitness for purpose and, to the extent permitted by law, all liability for your use of the code is disclaimed.
 // This source code is governed by Apache License 2.0 that can be found in the LICENSE file.
@@ -26,12 +26,12 @@ import (
 	"github.com/iotexproject/iotex-address/address"
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/pkg/tracer"
-	"github.com/iotexproject/iotex-core/pkg/util/byteutil"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/pkg/tracer"
+	"github.com/iotexproject/iotex-core/v2/pkg/util/byteutil"
 )
 
 var (
@@ -54,14 +54,6 @@ type (
 
 	// GetBlockTime gets block time by height
 	GetBlockTime func(uint64) (time.Time, error)
-
-	// DepositGasWithSGD deposits gas with Sharing of Gas-fee with DApps
-	DepositGasWithSGD func(context.Context, protocol.StateManager, address.Address, *big.Int, *big.Int) (*action.TransactionLog, error)
-
-	// SGDRegistry is the interface for handling Sharing of Gas-fee with DApps
-	SGDRegistry interface {
-		CheckContract(context.Context, string, uint64) (address.Address, uint64, bool, error)
-	}
 )
 
 // CanTransfer checks whether the from account has enough balance
@@ -103,13 +95,22 @@ type (
 		actionCtx   protocol.ActionCtx
 		helperCtx   HelperContext
 	}
+
+	stateDB interface {
+		vm.StateDB
+
+		CommitContracts() error
+		Logs() []*action.Log
+		TransactionLogs() []*action.TransactionLog
+		clear()
+		Error() error
+	}
 )
 
 // newParams creates a new context for use in the EVM.
 func newParams(
 	ctx context.Context,
-	execution *action.Execution,
-	stateDB *StateDBAdapter,
+	execution action.TxData,
 ) (*Params, error) {
 	var (
 		actionCtx    = protocol.MustGetActionCtx(ctx)
@@ -121,21 +122,11 @@ func newParams(
 		executorAddr = common.BytesToAddress(actionCtx.Caller.Bytes())
 		getBlockHash = helperCtx.GetBlockHash
 
-		vmConfig            vm.Config
-		contractAddrPointer *common.Address
-		getHashFn           vm.GetHashFunc
+		vmConfig  vm.Config
+		getHashFn vm.GetHashFunc
 	)
 
-	if dest := execution.Contract(); dest != action.EmptyAddress {
-		contract, err := address.FromString(execution.Contract())
-		if err != nil {
-			return nil, errors.Wrapf(err, "failed to decode contract address %s", dest)
-		}
-		contractAddr := common.BytesToAddress(contract.Bytes())
-		contractAddrPointer = &contractAddr
-	}
-
-	gasLimit := execution.GasLimit()
+	gasLimit := execution.Gas()
 	// Reset gas limit to the system wide action gas limit cap if it's greater than it
 	if blkCtx.BlockHeight > 0 && featureCtx.SystemWideActionGasLimit && gasLimit > _preAleutianActionGasLimit {
 		gasLimit = _preAleutianActionGasLimit
@@ -152,7 +143,7 @@ func newParams(
 		}
 	case featureCtx.FixGetHashFnHeight:
 		getHashFn = func(n uint64) common.Hash {
-			hash, err := getBlockHash(stateDB.blockHeight - (n + 1))
+			hash, err := getBlockHash(blkCtx.BlockHeight - (n + 1))
 			if err == nil {
 				return common.BytesToHash(hash[:])
 			}
@@ -160,7 +151,7 @@ func newParams(
 		}
 	default:
 		getHashFn = func(n uint64) common.Hash {
-			hash, err := getBlockHash(stateDB.blockHeight - n)
+			hash, err := getBlockHash(blkCtx.BlockHeight - n)
 			if err != nil {
 				// initial implementation did wrong, should return common.Hash{} in case of error
 				return common.BytesToHash(hash[:])
@@ -184,24 +175,39 @@ func newParams(
 		// Random opcode (EIP-4399) is not supported
 		context.Random = &common.Hash{}
 	}
+	if g.IsVanuatu(blkCtx.BlockHeight) {
+		// enable BLOBBASEFEE opcode
+		context.BlobBaseFee = protocol.CalcBlobFee(blkCtx.ExcessBlobGas)
+		// enable BASEFEE opcode
+		if blkCtx.BaseFee != nil {
+			context.BaseFee = new(big.Int).Set(blkCtx.BaseFee)
+		}
+	}
 
 	if vmCfg, ok := protocol.GetVMConfigCtx(ctx); ok {
 		vmConfig = vmCfg
 	}
-	chainConfig, err := getChainConfig(g.Blockchain, blkCtx.BlockHeight, evmNetworkID, helperCtx.GetBlockTime)
+	chainConfig, err := getChainConfig(g.Blockchain, blkCtx.BlockHeight, evmNetworkID, func(height uint64) (*time.Time, error) {
+		return blockHeightToTime(ctx, height)
+	})
 	if err != nil {
 		return nil, err
 	}
-
+	vmTxCtx := vm.TxContext{
+		Origin:   executorAddr,
+		GasPrice: execution.GasPrice(),
+	}
+	if g.IsVanuatu(blkCtx.BlockHeight) {
+		// enable BLOBHASH opcode
+		vmTxCtx.BlobHashes = execution.BlobHashes()
+		vmTxCtx.BlobFeeCap = execution.BlobGasFeeCap()
+	}
 	return &Params{
 		context,
-		vm.TxContext{
-			Origin:   executorAddr,
-			GasPrice: execution.GasPrice(),
-		},
+		vmTxCtx,
 		execution.Nonce(),
-		execution.Amount(),
-		contractAddrPointer,
+		execution.Value(),
+		execution.To(),
 		gasLimit,
 		execution.Data(),
 		execution.AccessList(),
@@ -237,7 +243,7 @@ func securityDeposit(ps *Params, stateDB vm.StateDB, gasLimit uint64) error {
 func ExecuteContract(
 	ctx context.Context,
 	sm protocol.StateManager,
-	execution *action.Execution,
+	execution action.TxData,
 ) ([]byte, *action.Receipt, error) {
 	ctx, span := tracer.NewSpan(ctx, "evm.ExecuteContract")
 	defer span.End()
@@ -246,26 +252,26 @@ func ExecuteContract(
 	if err != nil {
 		return nil, nil, err
 	}
-	ps, err := newParams(ctx, execution, stateDB)
+	ps, err := newParams(ctx, execution)
 	if err != nil {
 		return nil, nil, err
 	}
-	sgd := ps.helperCtx.Sgd
-	retval, depositGas, remainingGas, contractAddress, statusCode, err := executeInEVM(ps, stateDB)
+	retval, depositGas, remainingGas, contractAddress, statusCode, err := executeInEVM(ctx, ps, stateDB)
 	if err != nil {
 		return nil, nil, err
 	}
 	receipt := &action.Receipt{
-		GasConsumed:     ps.gas - remainingGas,
-		BlockHeight:     ps.blkCtx.BlockHeight,
-		ActionHash:      ps.actionCtx.ActionHash,
-		ContractAddress: contractAddress,
+		GasConsumed:       ps.gas - remainingGas,
+		BlockHeight:       ps.blkCtx.BlockHeight,
+		ActionHash:        ps.actionCtx.ActionHash,
+		ContractAddress:   contractAddress,
+		Status:            uint64(statusCode),
+		EffectiveGasPrice: protocol.EffectiveGasPrice(ctx, execution),
 	}
-
-	receipt.Status = uint64(statusCode)
 	var (
-		depositLog, burnLog *action.TransactionLog
-		consumedGas         = depositGas - remainingGas
+		depositLog  []*action.TransactionLog
+		burnLog     *action.TransactionLog
+		consumedGas = depositGas - remainingGas
 	)
 	if ps.featureCtx.FixDoubleChargeGas {
 		// Refund all deposit and, actual gas fee will be subtracted when depositing gas fee to the rewarding protocol
@@ -285,36 +291,21 @@ func ExecuteContract(
 		}
 	}
 	if consumedGas > 0 {
-		var (
-			receiver                  address.Address
-			sharedGas                 uint64
-			sharedGasFee, totalGasFee *big.Int
-		)
-		if ps.featureCtx.SharedGasWithDapp && sgd != nil {
-			// TODO: sgd is whether nil should be checked in processSGD
-			receiver, sharedGas, err = processSGD(ctx, sm, execution, consumedGas, sgd)
-			if err != nil {
-				return nil, nil, errors.Wrap(err, "failed to process Sharing of Gas-fee with DApps")
-			}
+		priorityFee, baseFee, err := protocol.SplitGas(ctx, execution, consumedGas)
+		if err != nil {
+			return nil, nil, errors.Wrapf(err, "failed to split gas")
 		}
-		if sharedGas > 0 {
-			sharedGasFee = big.NewInt(int64(sharedGas))
-			sharedGasFee.Mul(sharedGasFee, ps.txCtx.GasPrice)
+		depositLog, err = ps.helperCtx.DepositGasFunc(ctx, sm, baseFee, protocol.PriorityFeeOption(priorityFee))
+		if err != nil {
+			return nil, nil, err
 		}
-		totalGasFee = new(big.Int).Mul(new(big.Int).SetUint64(consumedGas), ps.txCtx.GasPrice)
-		if ps.helperCtx.DepositGasFunc != nil {
-			depositLog, err = ps.helperCtx.DepositGasFunc(ctx, sm, receiver, totalGasFee, sharedGasFee)
-			if err != nil {
-				return nil, nil, err
-			}
-		}
-
 	}
 
 	if err := stateDB.CommitContracts(); err != nil {
 		return nil, nil, errors.Wrap(err, "failed to commit contracts to underlying db")
 	}
-	receipt.AddLogs(stateDB.Logs()...).AddTransactionLogs(depositLog, burnLog)
+	receipt.AddLogs(stateDB.Logs()...).AddTransactionLogs(depositLog...)
+	receipt.AddTransactionLogs(burnLog)
 	if receipt.Status == uint64(iotextypes.ReceiptStatus_Success) ||
 		ps.featureCtx.AddOutOfGasToTransactionLog && receipt.Status == uint64(iotextypes.ReceiptStatus_ErrCodeStoreOutOfGas) {
 		receipt.AddTransactionLogs(stateDB.TransactionLogs()...)
@@ -330,27 +321,6 @@ func ExecuteContract(
 	}
 	log.S().Debugf("Receipt: %+v, %v", receipt, err)
 	return retval, receipt, nil
-}
-
-func processSGD(ctx context.Context, sm protocol.StateManager, execution *action.Execution, consumedGas uint64, sgd SGDRegistry,
-) (address.Address, uint64, error) {
-	if execution.Contract() == action.EmptyAddress {
-		return nil, 0, nil
-	}
-	height, err := sm.Height()
-	if err != nil {
-		return nil, 0, err
-	}
-	receiver, percentage, ok, err := sgd.CheckContract(ctx, execution.Contract(), height-1)
-	if err != nil || !ok {
-		return nil, 0, err
-	}
-
-	sharedGas := consumedGas * percentage / 100
-	if sharedGas > consumedGas {
-		sharedGas = consumedGas
-	}
-	return receiver, sharedGas, nil
 }
 
 // ReadContractStorage reads contract's storage
@@ -378,10 +348,12 @@ func ReadContractStorage(
 }
 
 func prepareStateDB(ctx context.Context, sm protocol.StateManager) (*StateDBAdapter, error) {
-	actionCtx := protocol.MustGetActionCtx(ctx)
-	blkCtx := protocol.MustGetBlockCtx(ctx)
-	featureCtx := protocol.MustGetFeatureCtx(ctx)
-	opts := []StateDBAdapterOption{}
+	var (
+		actionCtx  = protocol.MustGetActionCtx(ctx)
+		blkCtx     = protocol.MustGetBlockCtx(ctx)
+		featureCtx = protocol.MustGetFeatureCtx(ctx)
+		opts       = []StateDBAdapterOption{}
+	)
 	if featureCtx.CreateLegacyNonceAccount {
 		opts = append(opts, LegacyNonceAccountOption())
 	}
@@ -411,7 +383,16 @@ func prepareStateDB(ctx context.Context, sm protocol.StateManager) (*StateDBAdap
 	if featureCtx.SuicideTxLogMismatchPanic {
 		opts = append(opts, SuicideTxLogMismatchPanicOption())
 	}
-
+	if featureCtx.PanicUnrecoverableError {
+		opts = append(opts, PanicUnrecoverableErrorOption())
+	}
+	if featureCtx.EnableCancunEVM {
+		opts = append(opts, EnableCancunEVMOption())
+	}
+	if featureCtx.FixRevertSnapshot || actionCtx.ReadOnly {
+		opts = append(opts, FixRevertSnapshotOption())
+		opts = append(opts, WithContext(ctx))
+	}
 	return NewStateDBAdapter(
 		sm,
 		blkCtx.BlockHeight,
@@ -420,7 +401,7 @@ func prepareStateDB(ctx context.Context, sm protocol.StateManager) (*StateDBAdap
 	)
 }
 
-func getChainConfig(g genesis.Blockchain, height uint64, id uint32, getBlockTime GetBlockTime) (*params.ChainConfig, error) {
+func getChainConfig(g genesis.Blockchain, height uint64, id uint32, getBlockTime func(uint64) (*time.Time, error)) (*params.ChainConfig, error) {
 	var chainConfig params.ChainConfig
 	chainConfig.ConstantinopleBlock = new(big.Int).SetUint64(0) // Constantinople switch block (nil = no fork, 0 = already activated)
 	chainConfig.BeringBlock = new(big.Int).SetUint64(g.BeringBlockHeight)
@@ -444,14 +425,42 @@ func getChainConfig(g genesis.Blockchain, height uint64, id uint32, getBlockTime
 	sumatraTime, err := getBlockTime(g.SumatraBlockHeight)
 	if err != nil {
 		return nil, err
+	} else if sumatraTime != nil {
+		sumatraTimestamp := (uint64)(sumatraTime.Unix())
+		chainConfig.ShanghaiTime = &sumatraTimestamp
 	}
-	sumatraTimestamp := (uint64)(sumatraTime.Unix())
-	chainConfig.ShanghaiTime = &sumatraTimestamp
+	// enable Cancun at Vanuatu
+	cancunTime, err := getBlockTime(g.VanuatuBlockHeight)
+	if err != nil {
+		return nil, err
+	} else if cancunTime != nil {
+		cancunTimestamp := (uint64)(cancunTime.Unix())
+		chainConfig.CancunTime = &cancunTimestamp
+	}
 	return &chainConfig, nil
 }
 
+// blockHeightToTime returns the block time by height
+// if height is greater than current block height, return nil
+// if height is equal to current block height, return current block time
+// otherwise, return the block time by height from the blockchain
+func blockHeightToTime(ctx context.Context, height uint64) (*time.Time, error) {
+	blkCtx := protocol.MustGetBlockCtx(ctx)
+	if height > blkCtx.BlockHeight {
+		return nil, nil
+	}
+	if height == blkCtx.BlockHeight {
+		return &blkCtx.BlockTimeStamp, nil
+	}
+	t, err := mustGetHelperCtx(ctx).GetBlockTime(height)
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
 // Error in executeInEVM is a consensus issue
-func executeInEVM(evmParams *Params, stateDB *StateDBAdapter) ([]byte, uint64, uint64, string, iotextypes.ReceiptStatus, error) {
+func executeInEVM(ctx context.Context, evmParams *Params, stateDB stateDB) ([]byte, uint64, uint64, string, iotextypes.ReceiptStatus, error) {
 	var (
 		gasLimit     = evmParams.blkCtx.GasLimit
 		blockHeight  = evmParams.blkCtx.BlockHeight
@@ -460,7 +469,7 @@ func executeInEVM(evmParams *Params, stateDB *StateDBAdapter) ([]byte, uint64, u
 		chainConfig  = evmParams.chainConfig
 	)
 	if err := securityDeposit(evmParams, stateDB, gasLimit); err != nil {
-		log.L().Warn("unexpected error: not enough security deposit", zap.Error(err))
+		log.T(ctx).Warn("unexpected error: not enough security deposit", zap.Error(err))
 		return nil, 0, 0, action.EmptyAddress, iotextypes.ReceiptStatus_Failure, err
 	}
 	var (
@@ -496,7 +505,7 @@ func executeInEVM(evmParams *Params, stateDB *StateDBAdapter) ([]byte, uint64, u
 		// create contract
 		var evmContractAddress common.Address
 		_, evmContractAddress, remainingGas, evmErr = evm.Create(executor, evmParams.data, remainingGas, amount)
-		log.L().Debug("evm Create.", log.Hex("addrHash", evmContractAddress[:]))
+		log.T(ctx).Debug("evm Create.", log.Hex("addrHash", evmContractAddress[:]))
 		if evmErr == nil {
 			if contractAddress, err := address.FromBytes(evmContractAddress.Bytes()); err == nil {
 				contractRawAddress = contractAddress.String()
@@ -508,7 +517,7 @@ func executeInEVM(evmParams *Params, stateDB *StateDBAdapter) ([]byte, uint64, u
 		ret, remainingGas, evmErr = evm.Call(executor, *evmParams.contract, evmParams.data, remainingGas, amount)
 	}
 	if evmErr != nil {
-		log.L().Debug("evm error", zap.Error(evmErr))
+		log.T(ctx).Debug("evm error", zap.Error(evmErr))
 		// The only possible consensus-error would be if there wasn't
 		// sufficient balance to make the transfer happen.
 		// Should be a hard fork (Bering)
@@ -517,7 +526,7 @@ func executeInEVM(evmParams *Params, stateDB *StateDBAdapter) ([]byte, uint64, u
 		}
 	}
 	if stateDB.Error() != nil {
-		log.L().Debug("statedb error", zap.Error(stateDB.Error()))
+		log.T(ctx).Debug("statedb error", zap.Error(stateDB.Error()))
 	}
 	if !rules.IsLondon {
 		// Before EIP-3529: refunds were capped to gasUsed / 2
@@ -556,7 +565,7 @@ func executeInEVM(evmParams *Params, stateDB *StateDBAdapter) ([]byte, uint64, u
 			} else {
 				addr = "contract creation"
 			}
-			log.L().Warn("evm internal error", zap.Error(evmErr),
+			log.T(ctx).Warn("evm internal error", zap.Error(evmErr),
 				zap.String("address", addr),
 				log.Hex("calldata", evmParams.data))
 		}
@@ -640,10 +649,14 @@ func SimulateExecution(
 	ctx context.Context,
 	sm protocol.StateManager,
 	caller address.Address,
-	ex *action.Execution,
+	ex action.TxDataForSimulation,
+	opts ...protocol.SimulateOption,
 ) ([]byte, *action.Receipt, error) {
 	ctx, span := tracer.NewSpan(ctx, "evm.SimulateExecution")
 	defer span.End()
+	if err := ex.SanityCheck(); err != nil {
+		return nil, nil, err
+	}
 	bcCtx := protocol.MustGetBlockchainCtx(ctx)
 	g := genesis.MustExtractGenesisContext(ctx)
 	ctx = protocol.WithActionCtx(
@@ -651,26 +664,32 @@ func SimulateExecution(
 		protocol.ActionCtx{
 			Caller:     caller,
 			ActionHash: hash.Hash256b(byteutil.Must(proto.Marshal(ex.Proto()))),
+			ReadOnly:   true,
 		},
 	)
 	zeroAddr, err := address.FromString(address.ZeroAddress)
 	if err != nil {
 		return nil, nil, err
 	}
-	ctx = protocol.WithBlockCtx(
+	cfg := &protocol.SimulateOptionConfig{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	if cfg.PreOpt != nil {
+		if err := cfg.PreOpt(sm); err != nil {
+			return nil, nil, err
+		}
+	}
+	ctx = protocol.WithFeatureCtx(protocol.WithBlockCtx(
 		ctx,
 		protocol.BlockCtx{
 			BlockHeight:    bcCtx.Tip.Height + 1,
 			BlockTimeStamp: bcCtx.Tip.Timestamp.Add(g.BlockInterval),
 			GasLimit:       g.BlockGasLimitByHeight(bcCtx.Tip.Height + 1),
 			Producer:       zeroAddr,
+			BaseFee:        protocol.CalcBaseFee(g.Blockchain, &bcCtx.Tip),
+			ExcessBlobGas:  protocol.CalcExcessBlobGas(bcCtx.Tip.ExcessBlobGas, bcCtx.Tip.BlobGasUsed),
 		},
-	)
-
-	ctx = protocol.WithFeatureCtx(ctx)
-	return ExecuteContract(
-		ctx,
-		sm,
-		ex,
-	)
+	))
+	return ExecuteContract(ctx, sm, ex)
 }

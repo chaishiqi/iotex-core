@@ -11,17 +11,18 @@ import (
 	"github.com/pkg/errors"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+	"golang.org/x/time/rate"
 
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/execution/evm"
-	"github.com/iotexproject/iotex-core/actpool"
-	"github.com/iotexproject/iotex-core/blockchain"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/blockdao"
-	"github.com/iotexproject/iotex-core/blockindex"
-	"github.com/iotexproject/iotex-core/blocksync"
-	"github.com/iotexproject/iotex-core/pkg/tracer"
-	"github.com/iotexproject/iotex-core/state/factory"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/execution/evm"
+	"github.com/iotexproject/iotex-core/v2/actpool"
+	"github.com/iotexproject/iotex-core/v2/blockchain"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/blockdao"
+	"github.com/iotexproject/iotex-core/v2/blockindex"
+	"github.com/iotexproject/iotex-core/v2/blocksync"
+	"github.com/iotexproject/iotex-core/v2/pkg/tracer"
+	"github.com/iotexproject/iotex-core/v2/state/factory"
 )
 
 // ServerV2 provides api for user to interact with blockchain data
@@ -44,10 +45,10 @@ func NewServerV2(
 	bfIndexer blockindex.BloomFilterIndexer,
 	actPool actpool.ActPool,
 	registry *protocol.Registry,
-	getBlockTime evm.GetBlockTime,
+	_ evm.GetBlockTime, // TODO: remove unused getBlockTime
 	opts ...Option,
 ) (*ServerV2, error) {
-	coreAPI, err := newCoreService(cfg, chain, bs, sf, dao, indexer, bfIndexer, actPool, registry, getBlockTime, opts...)
+	coreAPI, err := newCoreService(cfg, chain, bs, sf, dao, indexer, bfIndexer, actPool, registry, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -65,11 +66,12 @@ func NewServerV2(
 
 	wrappedWeb3Handler := otelhttp.NewHandler(newHTTPHandler(web3Handler), "web3.jsonrpc")
 
-	wrappedWebsocketHandler := otelhttp.NewHandler(NewWebsocketHandler(web3Handler), "web3.websocket")
+	limiter := rate.NewLimiter(rate.Limit(cfg.WebsocketRateLimit), 1)
+	wrappedWebsocketHandler := otelhttp.NewHandler(NewWebsocketHandler(coreAPI, web3Handler, limiter), "web3.websocket")
 
 	return &ServerV2{
 		core:         coreAPI,
-		grpcServer:   NewGRPCServer(coreAPI, cfg.GRPCPort),
+		grpcServer:   NewGRPCServer(coreAPI, newBlockDAOService(dao), cfg.GRPCPort),
 		httpSvr:      NewHTTPServer("", cfg.HTTPPort, wrappedWeb3Handler),
 		websocketSvr: NewHTTPServer("", cfg.WebSocketPort, wrappedWebsocketHandler),
 		tracer:       tp,

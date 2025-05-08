@@ -11,7 +11,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/iotexproject/iotex-core/state"
+	"github.com/iotexproject/iotex-core/v2/state"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,7 +46,7 @@ func (imsm *inMemStateManager) States(...StateOption) (uint64, state.Iterator, e
 	return 0, nil, nil
 }
 
-func (imsm *inMemStateManager) ReadView(string) (interface{}, error) {
+func (imsm *inMemStateManager) ReadView(string) (View, error) {
 	return nil, nil
 }
 
@@ -88,7 +88,7 @@ func (imsm *inMemStateManager) DelState(opts ...StateOption) (uint64, error) {
 	return 0, nil
 }
 
-func (imsm *inMemStateManager) WriteView(string, interface{}) error {
+func (imsm *inMemStateManager) WriteView(string, View) error {
 	return nil
 }
 

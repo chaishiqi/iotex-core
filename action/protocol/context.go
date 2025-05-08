@@ -1,4 +1,4 @@
-// Copyright (c) 2019 IoTeX Foundation
+// Copyright (c) 2024 IoTeX Foundation
 // This source code is provided 'as is' and no warranties are given as to title or non-infringement, merchantability
 // or fitness for purpose and, to the extent permitted by law, all liability for your use of the code is disclaimed.
 // This source code is governed by Apache License 2.0 that can be found in the LICENSE file.
@@ -13,9 +13,11 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/iotexproject/go-pkgs/hash"
 	"github.com/iotexproject/iotex-address/address"
+	"github.com/pkg/errors"
 
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
 )
 
 type (
@@ -35,9 +37,13 @@ type (
 
 	// TipInfo contains the tip block information
 	TipInfo struct {
-		Height    uint64
-		Hash      hash.Hash256
-		Timestamp time.Time
+		Height        uint64
+		GasUsed       uint64
+		Hash          hash.Hash256
+		Timestamp     time.Time
+		BaseFee       *big.Int
+		BlobGasUsed   uint64
+		ExcessBlobGas uint64
 	}
 
 	// BlockchainCtx provides blockchain auxiliary information.
@@ -48,6 +54,10 @@ type (
 		ChainID uint32
 		// EvmNetworkID is the EVM network ID
 		EvmNetworkID uint32
+		// GetBlockHash is the function to get block hash by height
+		GetBlockHash func(uint64) (hash.Hash256, error)
+		// GetBlockTime is the function to get block time by height
+		GetBlockTime func(uint64) (time.Time, error)
 	}
 
 	// BlockCtx provides block auxiliary information.
@@ -60,6 +70,14 @@ type (
 		GasLimit uint64
 		// Producer is the address of whom composes the block containing this action
 		Producer address.Address
+		// AccumTips is the accumulated tips of the block
+		AccumulatedTips big.Int
+		// BaseFee is the base fee of the block
+		BaseFee *big.Int
+		// ExcessBlobGas is the excess blob gas of the block
+		ExcessBlobGas uint64
+		// SkipSidecarValidation dictates to validate sidecar (for blob tx) or not
+		SkipSidecarValidation bool
 	}
 
 	// ActionCtx provides action auxiliary information.
@@ -74,6 +92,8 @@ type (
 		IntrinsicGas uint64
 		// Nonce is the nonce of the action
 		Nonce uint64
+		// ReadOnly indicates two scenarios: eth_estimateGas and eth_call
+		ReadOnly bool
 	}
 
 	// CheckFunc is function type to check by height.
@@ -108,6 +128,8 @@ type (
 		FixGasAndNonceUpdate                    bool
 		FixUnproductiveDelegates                bool
 		CorrectGasRefund                        bool
+		SufficentBalanceGuarantee               bool
+		TolerateEmptyCandidateName              bool
 		SkipSystemActionNonce                   bool
 		ValidateSystemAction                    bool
 		AllowCorrectChainIDOnly                 bool
@@ -115,11 +137,26 @@ type (
 		FixContractStakingWeightedVotes         bool
 		ExecutionSizeLimit32KB                  bool
 		UseZeroNonceForFreshAccount             bool
-		SharedGasWithDapp                       bool
 		CandidateRegisterMustWithStake          bool
 		DisableDelegateEndorsement              bool
 		RefactorFreshAccountConversion          bool
 		SuicideTxLogMismatchPanic               bool
+		PanicUnrecoverableError                 bool
+		CandidateIdentifiedByOwner              bool
+		LimitedStakingContract                  bool
+		MigrateNativeStake                      bool
+		AddClaimRewardAddress                   bool
+		EnforceLegacyEndorsement                bool
+		EnableDynamicFeeTx                      bool
+		EnableBlobTransaction                   bool
+		EnableCancunEVM                         bool
+		CorrectValidationOrder                  bool
+		UnstakedButNotClearSelfStakeAmount      bool
+		CheckStakingDurationUpperLimit          bool
+		FixRevertSnapshot                       bool
+		TimestampedStakingContract              bool
+		PreStateSystemAction                    bool
+		MakeUpBlockReward                       bool
 	}
 
 	// FeatureWithHeightCtx provides feature check functions.
@@ -253,6 +290,8 @@ func WithFeatureCtx(ctx context.Context) context.Context {
 			FixGasAndNonceUpdate:                    g.IsOkhotsk(height),
 			FixUnproductiveDelegates:                g.IsOkhotsk(height),
 			CorrectGasRefund:                        g.IsOkhotsk(height),
+			SufficentBalanceGuarantee:               g.IsOkhotsk(height),
+			TolerateEmptyCandidateName:              !g.IsPalau(height),
 			SkipSystemActionNonce:                   g.IsPalau(height),
 			ValidateSystemAction:                    g.IsQuebec(height),
 			AllowCorrectChainIDOnly:                 g.IsQuebec(height),
@@ -260,13 +299,35 @@ func WithFeatureCtx(ctx context.Context) context.Context {
 			FixContractStakingWeightedVotes:         g.IsRedsea(height),
 			ExecutionSizeLimit32KB:                  !g.IsSumatra(height),
 			UseZeroNonceForFreshAccount:             g.IsSumatra(height),
-			SharedGasWithDapp:                       g.IsToBeEnabled(height),
 			CandidateRegisterMustWithStake:          !g.IsTsunami(height),
 			DisableDelegateEndorsement:              !g.IsTsunami(height),
 			RefactorFreshAccountConversion:          g.IsTsunami(height),
-			SuicideTxLogMismatchPanic:               g.IsToBeEnabled(height),
+			SuicideTxLogMismatchPanic:               g.IsUpernavik(height),
+			PanicUnrecoverableError:                 g.IsUpernavik(height),
+			CandidateIdentifiedByOwner:              !g.IsUpernavik(height),
+			LimitedStakingContract:                  !g.IsUpernavik(height),
+			MigrateNativeStake:                      g.IsUpernavik(height),
+			AddClaimRewardAddress:                   g.IsUpernavik(height),
+			EnforceLegacyEndorsement:                !g.IsUpernavik(height),
+			EnableDynamicFeeTx:                      g.IsVanuatu(height),
+			EnableBlobTransaction:                   g.IsVanuatu(height),
+			EnableCancunEVM:                         g.IsVanuatu(height),
+			CorrectValidationOrder:                  g.IsVanuatu(height),
+			UnstakedButNotClearSelfStakeAmount:      !g.IsVanuatu(height),
+			CheckStakingDurationUpperLimit:          g.IsVanuatu(height),
+			FixRevertSnapshot:                       g.IsVanuatu(height),
+			TimestampedStakingContract:              g.IsWake(height),
+			PreStateSystemAction:                    !g.IsWake(height),
+			MakeUpBlockReward:                       g.IsWake(height),
 		},
 	)
+}
+
+func (fCtx *FeatureCtx) Tolerate(err error) bool {
+	if fCtx.TolerateEmptyCandidateName && errors.Cause(err) == action.ErrInvalidCanName {
+		return true
+	}
+	return false
 }
 
 // GetFeatureCtx gets FeatureCtx.

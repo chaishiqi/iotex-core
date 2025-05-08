@@ -15,23 +15,25 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/mohae/deepcopy"
 	"github.com/stretchr/testify/require"
 
 	"github.com/iotexproject/go-pkgs/hash"
 	"github.com/iotexproject/iotex-address/address"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/execution/evm"
-	"github.com/iotexproject/iotex-core/action/protocol/poll"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/config"
-	"github.com/iotexproject/iotex-core/pkg/unit"
-	"github.com/iotexproject/iotex-core/pkg/util/byteutil"
-	"github.com/iotexproject/iotex-core/server/itx"
-	"github.com/iotexproject/iotex-core/state"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/testutil"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/execution/evm"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/poll"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rewarding"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/config"
+	"github.com/iotexproject/iotex-core/v2/pkg/unit"
+	"github.com/iotexproject/iotex-core/v2/pkg/util/byteutil"
+	"github.com/iotexproject/iotex-core/v2/server/itx"
+	"github.com/iotexproject/iotex-core/v2/state"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/testutil"
 )
 
 func TestStakingContract(t *testing.T) {
@@ -112,22 +114,23 @@ func TestStakingContract(t *testing.T) {
 			if correctGas {
 				gasLimit *= 10
 			}
-			ex, err := action.NewExecution(contract, 1, big.NewInt(0), gasLimit, big.NewInt(0), params)
-			if err != nil {
-				return nil, err
-			}
-
+			elp := (&action.EnvelopeBuilder{}).SetAction(action.NewExecution(contract, big.NewInt(0), params)).
+				SetGasLimit(gasLimit).Build()
 			addr, err := address.FromString(address.ZeroAddress)
 			if err != nil {
 				return nil, err
 			}
 
 			ctx = evm.WithHelperCtx(ctx, evm.HelperContext{
-				GetBlockHash: dao.GetBlockHash,
-				GetBlockTime: fakeGetBlockTime,
+				GetBlockHash:   dao.GetBlockHash,
+				GetBlockTime:   fakeGetBlockTime,
+				DepositGasFunc: rewarding.DepositGas,
 			})
-			data, _, err := sf.SimulateExecution(ctx, addr, ex)
-
+			ws, err := sf.WorkingSet(ctx)
+			if err != nil {
+				return nil, err
+			}
+			data, _, err := evm.SimulateExecution(ctx, ws, addr, elp)
 			return data, err
 		})
 		require.NoError(err)
@@ -151,7 +154,7 @@ func TestStakingContract(t *testing.T) {
 		)
 		ctx = protocol.WithFeatureCtx(protocol.WithBlockCtx(ctx,
 			protocol.BlockCtx{
-				BlockHeight: genesis.Default.OkhotskBlockHeight,
+				BlockHeight: genesis.TestDefault().OkhotskBlockHeight,
 			}))
 		bcCtx := protocol.MustGetBlockchainCtx(ctx)
 		_, err = ns.Votes(ctx, bcCtx.Tip.Timestamp, false)
@@ -183,50 +186,20 @@ func TestStakingContract(t *testing.T) {
 	}
 
 	cfg := config.Default
-	testTriePath, err := testutil.PathOfTempFile("trie")
-	require.NoError(err)
-	testDBPath, err := testutil.PathOfTempFile("db")
-	require.NoError(err)
-	testIndexPath, err := testutil.PathOfTempFile("index")
-	require.NoError(err)
-	testBloomfilterIndexPath, err := testutil.PathOfTempFile("bloomfilterindex")
-	require.NoError(err)
-	testCandidateIndexPath, err := testutil.PathOfTempFile("candidateindex")
-	require.NoError(err)
-	testContractStakeIndexPath, err := testutil.PathOfTempFile("contractindex")
-	require.NoError(err)
-	testSystemLogPath, err := testutil.PathOfTempFile("systemlog")
-	require.NoError(err)
-	testConsensusPath, err := testutil.PathOfTempFile("consensus")
-	require.NoError(err)
-	testSGDIndexPath, err := testutil.PathOfTempFile("sgdIndex")
-	require.NoError(err)
+	cfg.Genesis = genesis.TestDefault()
+	cfg = deepcopy.Copy(cfg).(config.Config)
+	initDBPaths(require, &cfg)
+
 	defer func() {
-		testutil.CleanupPath(testTriePath)
-		testutil.CleanupPath(testDBPath)
-		testutil.CleanupPath(testIndexPath)
-		testutil.CleanupPath(testBloomfilterIndexPath)
-		testutil.CleanupPath(testCandidateIndexPath)
-		testutil.CleanupPath(testSystemLogPath)
-		testutil.CleanupPath(testConsensusPath)
-		testutil.CleanupPath(testContractStakeIndexPath)
-		testutil.CleanupPath(testSGDIndexPath)
+		clearDBPaths(&cfg)
 		// clear the gateway
 		delete(cfg.Plugins, config.GatewayPlugin)
 	}()
 
 	cfg.ActPool.MinGasPriceStr = "0"
 	cfg.Chain.TrieDBPatchFile = ""
-	cfg.Chain.TrieDBPath = testTriePath
-	cfg.Chain.ChainDBPath = testDBPath
-	cfg.Chain.IndexDBPath = testIndexPath
-	cfg.Chain.SGDIndexDBPath = testSGDIndexPath
-	cfg.Chain.BloomfilterIndexDBPath = testBloomfilterIndexPath
-	cfg.Chain.CandidateIndexDBPath = testCandidateIndexPath
-	cfg.Chain.ContractStakingIndexDBPath = testContractStakeIndexPath
-	cfg.System.SystemLogDBPath = testSystemLogPath
-	cfg.Consensus.RollDPoS.ConsensusDBPath = testConsensusPath
 	cfg.Chain.ProducerPrivKey = "a000000000000000000000000000000000000000000000000000000000000000"
+	cfg.Chain.MintTimeout = 0
 	cfg.Consensus.Scheme = config.RollDPoSScheme
 	cfg.Genesis.NumDelegates = 1
 	cfg.Genesis.NumSubEpochs = 10
@@ -238,7 +211,6 @@ func TestStakingContract(t *testing.T) {
 		},
 	}
 	cfg.Genesis.PollMode = "lifeLong"
-	cfg.Genesis.EnableGravityChainVoting = false
 	cfg.Plugins[config.GatewayPlugin] = true
 	cfg.Chain.EnableAsyncIndexWrite = false
 	cfg.Genesis.AleutianBlockHeight = 2

@@ -17,15 +17,14 @@ import (
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/rolldpos"
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/state"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rolldpos"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/state"
 )
 
 type governanceChainCommitteeProtocol struct {
-	getBlockTime              GetBlockTime
 	electionCommittee         committee.Committee
 	initGravityChainHeight    uint64
 	addr                      address.Address
@@ -35,19 +34,17 @@ type governanceChainCommitteeProtocol struct {
 }
 
 // NewGovernanceChainCommitteeProtocol creates a Poll Protocol which fetch result from governance chain
+// TODO: remove getBlockTime
 func NewGovernanceChainCommitteeProtocol(
 	candidatesIndexer *CandidateIndexer,
 	electionCommittee committee.Committee,
 	initGravityChainHeight uint64,
-	getBlockTime GetBlockTime,
+	_ GetBlockTime,
 	initialCandidatesInterval time.Duration,
 	sh *Slasher,
 ) (Protocol, error) {
 	if electionCommittee == nil {
 		return nil, ErrNoElectionCommittee
-	}
-	if getBlockTime == nil {
-		return nil, errors.New("getBlockTime api is not provided")
 	}
 
 	h := hash.Hash160b([]byte(_protocolID))
@@ -59,7 +56,6 @@ func NewGovernanceChainCommitteeProtocol(
 	return &governanceChainCommitteeProtocol{
 		electionCommittee:         electionCommittee,
 		initGravityChainHeight:    initGravityChainHeight,
-		getBlockTime:              getBlockTime,
 		addr:                      addr,
 		initialCandidatesInterval: initialCandidatesInterval,
 		sh:                        sh,
@@ -106,12 +102,12 @@ func (p *governanceChainCommitteeProtocol) CreatePreStates(ctx context.Context, 
 	return p.sh.CreatePreStates(ctx, sm, p.indexer)
 }
 
-func (p *governanceChainCommitteeProtocol) Handle(ctx context.Context, act action.Action, sm protocol.StateManager) (*action.Receipt, error) {
-	return handle(ctx, act, sm, p.indexer, p.addr.String())
+func (p *governanceChainCommitteeProtocol) Handle(ctx context.Context, elp action.Envelope, sm protocol.StateManager) (*action.Receipt, error) {
+	return handle(ctx, elp.Action(), sm, p.indexer, p.addr.String())
 }
 
-func (p *governanceChainCommitteeProtocol) Validate(ctx context.Context, act action.Action, sr protocol.StateReader) error {
-	return validate(ctx, sr, p, act)
+func (p *governanceChainCommitteeProtocol) Validate(ctx context.Context, elp action.Envelope, sr protocol.StateReader) error {
+	return validate(ctx, sr, p, elp.Action())
 }
 
 func (p *governanceChainCommitteeProtocol) candidatesByGravityChainHeight(height uint64) (state.CandidateList, error) {
@@ -234,7 +230,8 @@ func (p *governanceChainCommitteeProtocol) getGravityHeight(ctx context.Context,
 	rp := rolldpos.MustGetProtocol(protocol.MustGetRegistry(ctx))
 	epochNumber := rp.GetEpochNum(height)
 	epochHeight := rp.GetEpochHeight(epochNumber)
-	blkTime, err := p.getBlockTime(epochHeight)
+	bcCtx := protocol.MustGetBlockchainCtx(ctx)
+	blkTime, err := bcCtx.GetBlockTime(epochHeight)
 	if err != nil {
 		return 0, err
 	}

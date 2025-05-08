@@ -7,6 +7,7 @@ package integrity
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"encoding/hex"
 	"fmt"
 	"math/big"
@@ -14,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/golang/mock/gomock"
 	iotexcrypto "github.com/iotexproject/go-pkgs/crypto"
@@ -24,32 +27,35 @@ import (
 	"github.com/iotexproject/iotex-address/address"
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/account"
-	accountutil "github.com/iotexproject/iotex-core/action/protocol/account/util"
-	"github.com/iotexproject/iotex-core/action/protocol/execution"
-	"github.com/iotexproject/iotex-core/action/protocol/execution/evm"
-	"github.com/iotexproject/iotex-core/action/protocol/poll"
-	"github.com/iotexproject/iotex-core/action/protocol/rewarding"
-	"github.com/iotexproject/iotex-core/action/protocol/rolldpos"
-	"github.com/iotexproject/iotex-core/action/protocol/vote/candidatesutil"
-	"github.com/iotexproject/iotex-core/actpool"
-	"github.com/iotexproject/iotex-core/blockchain"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/blockdao"
-	"github.com/iotexproject/iotex-core/blockchain/filedao"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/blockindex"
-	"github.com/iotexproject/iotex-core/config"
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/db/trie/mptrie"
-	"github.com/iotexproject/iotex-core/pkg/unit"
-	"github.com/iotexproject/iotex-core/state"
-	"github.com/iotexproject/iotex-core/state/factory"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/test/mock/mock_blockcreationsubscriber"
-	"github.com/iotexproject/iotex-core/testutil"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/account"
+	accountutil "github.com/iotexproject/iotex-core/v2/action/protocol/account/util"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/execution"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/execution/evm"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/poll"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rewarding"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rolldpos"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/vote/candidatesutil"
+	"github.com/iotexproject/iotex-core/v2/actpool"
+	"github.com/iotexproject/iotex-core/v2/blockchain"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/blockdao"
+	"github.com/iotexproject/iotex-core/v2/blockchain/filedao"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/blockindex"
+	"github.com/iotexproject/iotex-core/v2/config"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/db/trie/mptrie"
+	"github.com/iotexproject/iotex-core/v2/pkg/unit"
+	. "github.com/iotexproject/iotex-core/v2/pkg/util/assertions"
+	"github.com/iotexproject/iotex-core/v2/pkg/util/blockutil"
+	"github.com/iotexproject/iotex-core/v2/state"
+	"github.com/iotexproject/iotex-core/v2/state/factory"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/test/mock/mock_blockcreationsubscriber"
+	"github.com/iotexproject/iotex-core/v2/test/mock/mock_poll"
+	"github.com/iotexproject/iotex-core/v2/testutil"
 )
 
 var (
@@ -475,7 +481,7 @@ func TestCreateBlockchain(t *testing.T) {
 	cfg := config.Default
 	// disable account-based testing
 	cfg.Chain.TrieDBPath = ""
-	cfg.Genesis.EnableGravityChainVoting = false
+	cfg.Genesis = genesis.TestDefault()
 	cfg.ActPool.MinGasPriceStr = "0"
 	// create chain
 	registry := protocol.NewRegistry()
@@ -484,7 +490,7 @@ func TestCreateBlockchain(t *testing.T) {
 	rp := rolldpos.NewProtocol(cfg.Genesis.NumCandidateDelegates, cfg.Genesis.NumDelegates, cfg.Genesis.NumSubEpochs)
 	require.NoError(rp.Register(registry))
 	factoryCfg := factory.GenerateConfig(cfg.Chain, cfg.Genesis)
-	sf, err := factory.NewFactory(factoryCfg, db.NewMemKVStore(), factory.RegistryOption(registry))
+	sf, err := factory.NewStateDB(factoryCfg, db.NewMemKVStore(), factory.RegistryStateDBOption(registry))
 	require.NoError(err)
 	ap, err := actpool.NewActPool(cfg.Genesis, sf, cfg.ActPool)
 	require.NoError(err)
@@ -501,7 +507,7 @@ func TestCreateBlockchain(t *testing.T) {
 			protocol.NewGenericValidator(sf, accountutil.AccountState),
 		)),
 	)
-	ep := execution.NewProtocol(dao.GetBlockHash, rewarding.DepositGasWithSGD, nil, fakeGetBlockTime)
+	ep := execution.NewProtocol(dao.GetBlockHash, rewarding.DepositGas, fakeGetBlockTime)
 	require.NoError(ep.Register(registry))
 	rewardingProtocol := rewarding.NewProtocol(cfg.Genesis.Rewarding)
 	require.NoError(rewardingProtocol.Register(registry))
@@ -526,12 +532,13 @@ func TestGetBlockHash(t *testing.T) {
 	cfg := config.Default
 	// disable account-based testing
 	cfg.Chain.TrieDBPath = ""
-	cfg.Genesis.EnableGravityChainVoting = false
+	cfg.Genesis = genesis.TestDefault()
+	cfg.Genesis.AleutianBlockHeight = 2
 	cfg.Genesis.HawaiiBlockHeight = 4
 	cfg.Genesis.MidwayBlockHeight = 9
 	cfg.ActPool.MinGasPriceStr = "0"
 	genesis.SetGenesisTimestamp(cfg.Genesis.Timestamp)
-	block.LoadGenesisHash(&genesis.Default)
+	block.LoadGenesisHash(&cfg.Genesis)
 	// create chain
 	registry := protocol.NewRegistry()
 	acc := account.NewProtocol(rewarding.DepositGas)
@@ -539,7 +546,7 @@ func TestGetBlockHash(t *testing.T) {
 	rp := rolldpos.NewProtocol(cfg.Genesis.NumCandidateDelegates, cfg.Genesis.NumDelegates, cfg.Genesis.NumSubEpochs)
 	require.NoError(rp.Register(registry))
 	factoryCfg := factory.GenerateConfig(cfg.Chain, cfg.Genesis)
-	sf, err := factory.NewFactory(factoryCfg, db.NewMemKVStore(), factory.RegistryOption(registry))
+	sf, err := factory.NewStateDB(factoryCfg, db.NewMemKVStore(), factory.RegistryStateDBOption(registry))
 	require.NoError(err)
 	ap, err := actpool.NewActPool(cfg.Genesis, sf, cfg.ActPool)
 	require.NoError(err)
@@ -556,7 +563,7 @@ func TestGetBlockHash(t *testing.T) {
 			protocol.NewGenericValidator(sf, accountutil.AccountState),
 		)),
 	)
-	ep := execution.NewProtocol(dao.GetBlockHash, rewarding.DepositGasWithSGD, nil, fakeGetBlockTime)
+	ep := execution.NewProtocol(dao.GetBlockHash, rewarding.DepositGas, fakeGetBlockTime)
 	require.NoError(ep.Register(registry))
 	rewardingProtocol := rewarding.NewProtocol(cfg.Genesis.Rewarding)
 	require.NoError(rewardingProtocol.Register(registry))
@@ -675,7 +682,7 @@ func addTestingGetBlockHash(t *testing.T, g genesis.Genesis, bc blockchain.Block
 			bcHash = hash.ZeroHash256
 		} else if test.commitHeight < g.HawaiiBlockHeight {
 			// before hawaii it mistakenly return zero hash
-			// see https://github.com/iotexproject/iotex-core/commit/2585b444214f9009b6356fbaf59c992e8728fc01
+			// see https://github.com/iotexproject/iotex-core/v2/commit/2585b444214f9009b6356fbaf59c992e8728fc01
 			bcHash = hash.ZeroHash256
 		} else {
 			var targetHeight uint64
@@ -687,15 +694,15 @@ func addTestingGetBlockHash(t *testing.T, g genesis.Genesis, bc blockchain.Block
 			bcHash, err = dao.GetBlockHash(targetHeight)
 			require.NoError(err)
 		}
-		require.Equal(r.Logs()[0].Topics[0], bcHash)
+		require.Equal(r.Logs()[0].Topics[1], bcHash)
 		nonce++
 	}
 }
 
 func TestBlockchain_MintNewBlock(t *testing.T) {
 	cfg := config.Default
+	cfg.Genesis = genesis.TestDefault()
 	cfg.Genesis.BlockGasLimit = uint64(100000)
-	cfg.Genesis.EnableGravityChainVoting = false
 	cfg.ActPool.MinGasPriceStr = "0"
 	ctx := genesis.WithGenesisContext(context.Background(), cfg.Genesis)
 	registry := protocol.NewRegistry()
@@ -704,7 +711,7 @@ func TestBlockchain_MintNewBlock(t *testing.T) {
 	rp := rolldpos.NewProtocol(cfg.Genesis.NumCandidateDelegates, cfg.Genesis.NumDelegates, cfg.Genesis.NumSubEpochs)
 	require.NoError(t, rp.Register(registry))
 	factoryCfg := factory.GenerateConfig(cfg.Chain, cfg.Genesis)
-	sf, err := factory.NewFactory(factoryCfg, db.NewMemKVStore(), factory.RegistryOption(registry))
+	sf, err := factory.NewStateDB(factoryCfg, db.NewMemKVStore(), factory.RegistryStateDBOption(registry))
 	require.NoError(t, err)
 	ap, err := actpool.NewActPool(cfg.Genesis, sf, cfg.ActPool)
 	require.NoError(t, err)
@@ -721,7 +728,7 @@ func TestBlockchain_MintNewBlock(t *testing.T) {
 			protocol.NewGenericValidator(sf, accountutil.AccountState),
 		)),
 	)
-	ep := execution.NewProtocol(dao.GetBlockHash, rewarding.DepositGasWithSGD, nil, fakeGetBlockTime)
+	ep := execution.NewProtocol(dao.GetBlockHash, rewarding.DepositGas, fakeGetBlockTime)
 	require.NoError(t, ep.Register(registry))
 	rewardingProtocol := rewarding.NewProtocol(cfg.Genesis.Rewarding)
 	require.NoError(t, rewardingProtocol.Register(registry))
@@ -730,18 +737,12 @@ func TestBlockchain_MintNewBlock(t *testing.T) {
 		require.NoError(t, bc.Stop(ctx))
 	}()
 
-	tsf, err := action.NewTransfer(
-		1,
+	tsf := action.NewTransfer(
 		big.NewInt(100000000),
 		identityset.Address(27).String(),
-		[]byte{}, uint64(100000),
-		big.NewInt(10),
-	)
-	require.NoError(t, err)
-
+		[]byte{})
 	data, _ := hex.DecodeString("608060405234801561001057600080fd5b5060df8061001f6000396000f3006080604052600436106049576000357c0100000000000000000000000000000000000000000000000000000000900463ffffffff16806360fe47b114604e5780636d4ce63c146078575b600080fd5b348015605957600080fd5b5060766004803603810190808035906020019092919050505060a0565b005b348015608357600080fd5b50608a60aa565b6040518082815260200191505060405180910390f35b8060008190555050565b600080549050905600a165627a7a7230582002faabbefbbda99b20217cf33cb8ab8100caf1542bf1f48117d72e2c59139aea0029")
-	execution, err := action.NewExecution(action.EmptyAddress, 2, big.NewInt(0), uint64(100000), big.NewInt(0), data)
-	require.NoError(t, err)
+	execution := action.NewExecution(action.EmptyAddress, big.NewInt(0), data)
 
 	bd := &action.EnvelopeBuilder{}
 	elp1 := bd.SetAction(tsf).
@@ -773,14 +774,14 @@ func TestBlockchain_MintNewBlock(t *testing.T) {
 
 func TestBlockchain_MintNewBlock_PopAccount(t *testing.T) {
 	cfg := config.Default
-	cfg.Genesis.EnableGravityChainVoting = false
+	cfg.Genesis = genesis.TestDefault()
 	cfg.ActPool.MinGasPriceStr = "0"
 	ctx := genesis.WithGenesisContext(context.Background(), cfg.Genesis)
 	registry := protocol.NewRegistry()
 	acc := account.NewProtocol(rewarding.DepositGas)
 	require.NoError(t, acc.Register(registry))
 	factoryCfg := factory.GenerateConfig(cfg.Chain, cfg.Genesis)
-	sf, err := factory.NewFactory(factoryCfg, db.NewMemKVStore(), factory.RegistryOption(registry))
+	sf, err := factory.NewStateDB(factoryCfg, db.NewMemKVStore(), factory.RegistryStateDBOption(registry))
 	require.NoError(t, err)
 	ap, err := actpool.NewActPool(cfg.Genesis, sf, cfg.ActPool)
 	require.NoError(t, err)
@@ -799,7 +800,7 @@ func TestBlockchain_MintNewBlock_PopAccount(t *testing.T) {
 	)
 	rp := rolldpos.NewProtocol(cfg.Genesis.NumCandidateDelegates, cfg.Genesis.NumDelegates, cfg.Genesis.NumSubEpochs)
 	require.NoError(t, rp.Register(registry))
-	ep := execution.NewProtocol(dao.GetBlockHash, rewarding.DepositGasWithSGD, nil, fakeGetBlockTime)
+	ep := execution.NewProtocol(dao.GetBlockHash, rewarding.DepositGas, fakeGetBlockTime)
 	require.NoError(t, ep.Register(registry))
 	rewardingProtocol := rewarding.NewProtocol(cfg.Genesis.Rewarding)
 	require.NoError(t, rewardingProtocol.Register(registry))
@@ -904,7 +905,7 @@ func createChain(cfg config.Config, inMem bool) (blockchain.Blockchain, factory.
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	var store blockdao.BlockDAO
+	var store blockdao.BlockStore
 	// create BlockDAO
 	if inMem {
 		store, err = filedao.NewFileDAOInMemForTest()
@@ -926,15 +927,11 @@ func createChain(cfg config.Config, inMem bool) (blockchain.Blockchain, factory.
 	if dao == nil {
 		return nil, nil, nil, nil, err
 	}
-	ep := execution.NewProtocol(dao.GetBlockHash, rewarding.DepositGasWithSGD, nil, fakeGetBlockTime)
-	if err = ep.Register(registry); err != nil {
-		return nil, nil, nil, nil, err
-	}
 	rewardingProtocol := rewarding.NewProtocol(cfg.Genesis.Rewarding)
 	if err = rewardingProtocol.Register(registry); err != nil {
 		return nil, nil, nil, nil, err
 	}
-	return blockchain.NewBlockchain(
+	bc := blockchain.NewBlockchain(
 		cfg.Chain,
 		cfg.Genesis,
 		dao,
@@ -943,10 +940,26 @@ func createChain(cfg config.Config, inMem bool) (blockchain.Blockchain, factory.
 			sf,
 			protocol.NewGenericValidator(sf, accountutil.AccountState),
 		)),
-	), sf, dao, ap, nil
+	)
+	btc, err := blockutil.NewBlockTimeCalculator(func(uint64) time.Duration { return time.Second },
+		bc.TipHeight, func(height uint64) (time.Time, error) {
+			blk, err := dao.GetBlockByHeight(height)
+			if err != nil {
+				return time.Time{}, err
+			}
+			return blk.Timestamp(), nil
+		})
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	ep := execution.NewProtocol(dao.GetBlockHash, rewarding.DepositGas, btc.CalculateBlockTime)
+	if err = ep.Register(registry); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return bc, sf, dao, ap, nil
 }
 
-func TestConvertCleanAddress(t *testing.T) {
+func TestBlockchainHardForkFeatures(t *testing.T) {
 	require := require.New(t)
 
 	cfg := config.Default
@@ -962,7 +975,7 @@ func TestConvertCleanAddress(t *testing.T) {
 	minGas := big.NewInt(unit.Qev)
 	cfg.Chain.IndexDBPath = testIndexPath
 	cfg.Chain.ProducerPrivKey = "a000000000000000000000000000000000000000000000000000000000000000"
-	cfg.Genesis.EnableGravityChainVoting = false
+	cfg.Genesis = genesis.TestDefault()
 	cfg.Plugins[config.GatewayPlugin] = true
 	cfg.Chain.EnableAsyncIndexWrite = false
 	cfg.ActPool.MinGasPriceStr = minGas.String()
@@ -989,12 +1002,30 @@ func TestConvertCleanAddress(t *testing.T) {
 	cfg.Genesis.RedseaBlockHeight = 2
 	cfg.Genesis.SumatraBlockHeight = 2
 	cfg.Genesis.TsunamiBlockHeight = 3
-	cfg.Genesis.ToBeEnabledBlockHeight = 3
+	cfg.Genesis.UpernavikBlockHeight = 4
+	cfg.Genesis.VanuatuBlockHeight = 4
 	cfg.Genesis.InitBalanceMap[identityset.Address(27).String()] = unit.ConvertIotxToRau(10000000000).String()
 
-	ctx := context.Background()
+	ctx := genesis.WithGenesisContext(context.Background(), cfg.Genesis)
 	bc, sf, dao, ap, err := createChain(cfg, true)
 	require.NoError(err)
+	sk, err := iotexcrypto.HexStringToPrivateKey(cfg.Chain.ProducerPrivKey)
+	require.NoError(err)
+	producer := sk.PublicKey().Address()
+	ctrl := gomock.NewController(t)
+	pp := mock_poll.NewMockProtocol(ctrl)
+	pp.EXPECT().CreateGenesisStates(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	pp.EXPECT().Candidates(gomock.Any(), gomock.Any()).Return([]*state.Candidate{
+		{
+			Address:       producer.String(),
+			RewardAddress: producer.String(),
+		},
+	}, nil).AnyTimes()
+	pp.EXPECT().Register(gomock.Any()).DoAndReturn(func(reg *protocol.Registry) error {
+		return reg.Register("poll", pp)
+	}).AnyTimes()
+	pp.EXPECT().Validate(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	require.NoError(sf.Register(pp))
 	require.NoError(bc.Start(ctx))
 	defer func() {
 		require.NoError(bc.Stop(ctx))
@@ -1010,7 +1041,6 @@ func TestConvertCleanAddress(t *testing.T) {
 	priKey0 := identityset.PrivateKey(27)
 	ex1, err := action.SignedExecution(action.EmptyAddress, priKey0, 1, new(big.Int), 500000, minGas, _constantinopleOpCodeContract)
 	require.NoError(err)
-	h, _ := ex1.Hash()
 	require.NoError(ap.Add(ctx, ex1))
 	tsf1, err := action.SignedTransfer(identityset.Address(25).String(), priKey0, 2, big.NewInt(10000), nil, 500000, minGas)
 	require.NoError(err)
@@ -1034,11 +1064,11 @@ func TestConvertCleanAddress(t *testing.T) {
 	require.NoError(bc.CommitBlock(blk))
 
 	// get deployed contract address
-	var r *action.Receipt
-	if dao != nil {
-		r, err = receiptByActionHash(dao, 1, h)
-		require.NoError(err)
-	}
+	h, err := ex1.Hash()
+	require.NoError(err)
+	r, err := receiptByActionHash(dao, 1, h)
+	require.NoError(err)
+	testContract := r.ContractAddress
 
 	// verify 4 recipients remain legacy fresh accounts
 	for _, v := range []struct {
@@ -1061,33 +1091,32 @@ func TestConvertCleanAddress(t *testing.T) {
 		require.Zero(nonce)
 	}
 
-	// Add block 2
-	t1, _ := action.NewTransfer(0, big.NewInt(100), identityset.Address(27).String(), nil, 500000, minGas)
-	elp := (&action.EnvelopeBuilder{}).SetNonce(t1.Nonce()).
+	// Add block 2 -- test the UseZeroNonceForFreshAccount flag
+	t1 := action.NewTransfer(big.NewInt(100), identityset.Address(27).String(), nil)
+	elp := (&action.EnvelopeBuilder{}).SetNonce(0).
 		SetChainID(cfg.Chain.ID).
-		SetGasPrice(t1.GasPrice()).
-		SetGasLimit(t1.GasLimit()).
+		SetGasPrice(minGas).
+		SetGasLimit(500000).
 		SetAction(t1).Build()
 	tsf1, err = action.Sign(elp, identityset.PrivateKey(25))
 	require.NoError(err)
 	require.NoError(ap.Add(ctx, tsf1))
-	t2, _ := action.NewTransfer(1, big.NewInt(200), identityset.Address(27).String(), nil, 500000, minGas)
-	elp = (&action.EnvelopeBuilder{}).SetNonce(t2.Nonce()).
+	t2 := action.NewTransfer(big.NewInt(200), identityset.Address(27).String(), nil)
+	elp = (&action.EnvelopeBuilder{}).SetNonce(1).
 		SetChainID(cfg.Chain.ID).
-		SetGasPrice(t2.GasPrice()).
-		SetGasLimit(t2.GasLimit()).
+		SetGasPrice(minGas).
+		SetGasLimit(500000).
 		SetAction(t2).Build()
 	tsf2, err = action.Sign(elp, identityset.PrivateKey(25))
 	require.NoError(err)
 	require.NoError(ap.Add(ctx, tsf2))
 	// call set() to set storedData = 0xfe...1f40
 	funcSig := hash.Hash256b([]byte("set(uint256)"))
-	data := append(funcSig[:4], _setTopic...)
-	e1, _ := action.NewExecution(r.ContractAddress, 0, new(big.Int), 500000, minGas, data)
-	elp = (&action.EnvelopeBuilder{}).SetNonce(e1.Nonce()).
+	e1 := action.NewExecution(testContract, new(big.Int), append(funcSig[:4], _setTopic...))
+	elp = (&action.EnvelopeBuilder{}).SetNonce(0).
 		SetChainID(cfg.Chain.ID).
-		SetGasPrice(e1.GasPrice()).
-		SetGasLimit(e1.GasLimit()).
+		SetGasPrice(minGas).
+		SetGasLimit(500000).
 		SetAction(e1).Build()
 	ex1, err = action.Sign(elp, identityset.PrivateKey(24))
 	require.NoError(err)
@@ -1149,65 +1178,54 @@ func TestConvertCleanAddress(t *testing.T) {
 	require.Equal(h, r.ActionHash)
 	require.EqualValues(37120, r.GasConsumed)
 	require.Empty(r.ContractAddress)
+	logs := r.Logs()
+	require.Equal(1, len(logs))
+	require.Equal(_setTopic, logs[0].Topics[1][:])
+	require.True(blk1.Header.LogsBloomfilter().Exist(_setTopic))
 
 	// verify deterministic deployment transaction
-	h, err = ex2.Hash()
+	deterministicTxHash, err := ex2.Hash()
 	require.NoError(err)
-	require.Equal("eddf9e61fb9d8f5111840daef55e5fde0041f5702856532cdbb5a02998033d26", hex.EncodeToString(h[:]))
-	r, err = receiptByActionHash(dao, 2, h)
+	require.Equal("eddf9e61fb9d8f5111840daef55e5fde0041f5702856532cdbb5a02998033d26", hex.EncodeToString(deterministicTxHash[:]))
+	r, err = receiptByActionHash(dao, 2, deterministicTxHash)
 	require.NoError(err)
 	require.EqualValues(iotextypes.ReceiptStatus_Success, r.Status)
 	require.EqualValues(2, r.BlockHeight)
-	require.Equal(h, r.ActionHash)
+	require.Equal(deterministicTxHash, r.ActionHash)
 	require.EqualValues(32139, r.GasConsumed)
 	require.Equal("io1fevmgjz8kdu40pvgjgx20ralymqtf9tv3mdu7f", r.ContractAddress)
 	tl, err := dao.TransactionLogs(2)
 	require.NoError(err)
 	require.Equal(4, len(tl.Logs))
 
-	// Add block 3
-	t1, _ = action.NewTransfer(0, big.NewInt(100), identityset.Address(27).String(), nil, 500000, minGas)
-	elp = (&action.EnvelopeBuilder{}).SetNonce(t1.Nonce()).
+	// Add block 3 -- test the RefactorFreshAccountConversion flag
+	t1 = action.NewTransfer(big.NewInt(100), identityset.Address(25).String(), nil)
+	elp = (&action.EnvelopeBuilder{}).SetNonce(0).
 		SetChainID(cfg.Chain.ID).
-		SetGasPrice(t1.GasPrice()).
-		SetGasLimit(t1.GasLimit()).
+		SetGasPrice(minGas).
+		SetGasLimit(500000).
 		SetAction(t1).Build()
 	tsf1, err = action.Sign(elp, identityset.PrivateKey(23))
 	require.NoError(err)
 	require.NoError(ap.Add(ctx, tsf1))
-	t2, _ = action.NewTransfer(1, big.NewInt(200), identityset.Address(27).String(), nil, 500000, minGas)
-	elp = (&action.EnvelopeBuilder{}).SetNonce(t2.Nonce()).
+	t2 = action.NewTransfer(big.NewInt(200), identityset.Address(24).String(), nil)
+	elp = (&action.EnvelopeBuilder{}).SetNonce(1).
 		SetChainID(cfg.Chain.ID).
-		SetGasPrice(t2.GasPrice()).
-		SetGasLimit(t2.GasLimit()).
+		SetGasPrice(minGas).
+		SetGasLimit(500000).
 		SetAction(t2).Build()
 	tsf2, err = action.Sign(elp, identityset.PrivateKey(23))
 	require.NoError(err)
 	require.NoError(ap.Add(ctx, tsf2))
-	t3, _ := action.NewTransfer(1, big.NewInt(100), identityset.Address(27).String(), nil, 500000, minGas)
-	elp = (&action.EnvelopeBuilder{}).SetNonce(t3.Nonce()).
-		SetChainID(cfg.Chain.ID).
-		SetGasPrice(t1.GasPrice()).
-		SetGasLimit(t1.GasLimit()).
-		SetAction(t3).Build()
-	tsf3, err = action.Sign(elp, identityset.PrivateKey(24))
-	require.NoError(err)
-	require.NoError(ap.Add(ctx, tsf3))
-	t4, _ := action.NewTransfer(2, big.NewInt(200), identityset.Address(27).String(), nil, 500000, minGas)
-	elp = (&action.EnvelopeBuilder{}).SetNonce(t4.Nonce()).
-		SetChainID(cfg.Chain.ID).
-		SetGasPrice(t2.GasPrice()).
-		SetGasLimit(t2.GasLimit()).
-		SetAction(t4).Build()
-	tsf4, err = action.Sign(elp, identityset.PrivateKey(25))
-	require.NoError(err)
-	require.NoError(ap.Add(ctx, tsf4))
 	blockTime = blockTime.Add(time.Second)
 	blk2, err := bc.MintNewBlock(blockTime)
 	require.NoError(err)
 	require.EqualValues(3, blk2.Height())
-	require.Equal(5, len(blk2.Body.Actions))
+	require.Equal(3, len(blk2.Body.Actions))
+	require.Zero(blk2.Header.GasUsed())
+	require.Nil(blk2.Header.BaseFee())
 	require.NoError(bc.CommitBlock(blk2))
+	ap.Reset()
 
 	// 4 legacy fresh accounts are converted to zero-nonce account
 	for _, v := range []struct {
@@ -1216,8 +1234,8 @@ func TestConvertCleanAddress(t *testing.T) {
 		b     string
 	}{
 		{identityset.Address(23), 2, "99999999980000000000029700"},
-		{identityset.Address(24), 2, "99999999952880000000009900"},
-		{identityset.Address(25), 3, "99999999970000000000009500"},
+		{identityset.Address(24), 1, "99999999962880000000010200"},
+		{identityset.Address(25), 2, "99999999980000000000009800"},
 		{deterministic, 1, "6786100000000000"},
 	} {
 		a, err := accountutil.AccountState(ctx, sf, v.a)
@@ -1227,7 +1245,137 @@ func TestConvertCleanAddress(t *testing.T) {
 		require.Equal(v.b, a.Balance.String())
 	}
 
-	// commit 3 blocks to a new chain
+	// Add block 4 -- test the UseTxContainer, AddClaimRewardAddress, and EIP-6780 selfdestruct
+	var (
+		txs          [2]*types.Transaction
+		contractHash hash.Hash256
+	)
+	txs[0] = types.NewTransaction(1, common.BytesToAddress(identityset.Address(23).Bytes()),
+		big.NewInt(100), 500000, minGas, nil)
+	testAddr, _ := address.FromString(testContract)
+	txs[1] = types.NewTransaction(2, common.BytesToAddress(testAddr.Bytes()),
+		new(big.Int), 500000, minGas, append(funcSig[:4], _sarTopic...))
+	signer := types.NewEIP155Signer(big.NewInt(int64(cfg.Chain.EVMNetworkID)))
+	sender := identityset.PrivateKey(24)
+	for i := 0; i < 2; i++ {
+		signedTx := MustNoErrorV(types.SignTx(txs[i], signer, sender.EcdsaPrivateKey().(*ecdsa.PrivateKey)))
+		raw := MustNoErrorV(signedTx.MarshalBinary())
+		// API receive/decode the tx
+		rawString := hex.EncodeToString(raw)
+		tx := MustNoErrorV(action.DecodeEtherTx(rawString))
+		require.True(tx.Protected())
+		require.EqualValues(cfg.Chain.EVMNetworkID, tx.ChainId().Uint64())
+		encoding, sig, pubkey, err := action.ExtractTypeSigPubkey(tx)
+		require.NoError(err)
+		require.Equal(iotextypes.Encoding_ETHEREUM_EIP155, encoding)
+		// use container to send tx
+		req := iotextypes.Action{
+			Core:         MustNoErrorV(action.EthRawToContainer(cfg.Chain.ID, rawString)),
+			SenderPubKey: pubkey.Bytes(),
+			Signature:    sig,
+			Encoding:     iotextypes.Encoding_TX_CONTAINER,
+		}
+		// decode the tx
+		selp := MustNoErrorV((&action.Deserializer{}).SetEvmNetworkID(cfg.Chain.EVMNetworkID).ActionToSealedEnvelope(&req))
+		_, ok := selp.Envelope.(action.TxContainer)
+		require.True(ok)
+		if i == 1 {
+			contractHash = MustNoErrorV(selp.Hash())
+		}
+		require.EqualValues(iotextypes.Encoding_TX_CONTAINER, selp.Encoding())
+		require.NoError(ap.Add(ctx, selp))
+		require.Equal(i+1, len(ap.GetUnconfirmedActs(sender.PublicKey().Address().String())))
+		require.Equal(1, len(ap.GetUnconfirmedActs(MustNoErrorV(address.FromBytes(txs[i].To()[:])).String())))
+	}
+	claim := action.NewClaimFromRewardingFund(big.NewInt(200000000000), producer, nil)
+	elp = (&action.EnvelopeBuilder{}).SetNonce(6).
+		SetChainID(cfg.Chain.ID).
+		SetGasPrice(minGas).
+		SetGasLimit(100000).
+		SetAction(claim).Build()
+	tsf2, err = action.Sign(elp, priKey0)
+	require.NoError(err)
+	require.NoError(ap.Add(ctx, tsf2))
+	elp = (&action.EnvelopeBuilder{}).SetNonce(7).
+		SetChainID(cfg.Chain.ID).
+		SetGasPrice(minGas).
+		SetGasLimit(500000).
+		SetAction(action.NewExecution(action.EmptyAddress, new(big.Int), _selfdestructContract)).Build()
+	ex1, err = action.Sign(elp, priKey0)
+	require.NoError(err)
+	require.NoError(ap.Add(ctx, ex1))
+	elp = (&action.EnvelopeBuilder{}).SetNonce(8).
+		SetChainID(cfg.Chain.ID).
+		SetGasPrice(minGas).
+		SetGasLimit(500000).
+		SetAction(action.NewExecution(action.EmptyAddress, new(big.Int), _selfdestructOnCreationContract)).Build()
+	ex2, err = action.Sign(elp, priKey0)
+	require.NoError(err)
+	require.NoError(ap.Add(ctx, ex2))
+	selfdestructContract := "io12fltnfupejreyl8fmd9jq6rcfextg5ra9zjwuz"
+	elp = (&action.EnvelopeBuilder{}).SetNonce(9).
+		SetChainID(cfg.Chain.ID).
+		SetGasPrice(minGas).
+		SetGasLimit(500000).
+		SetAction(action.NewExecution(selfdestructContract, new(big.Int), MustNoErrorV(hex.DecodeString("0c08bf88")))).Build()
+	ex3, err := action.Sign(elp, priKey0)
+	require.NoError(err)
+	require.NoError(ap.Add(ctx, ex3))
+
+	blockTime = blockTime.Add(time.Second)
+	blk3, err := bc.MintNewBlock(blockTime)
+	require.NoError(err)
+	require.EqualValues(4, blk3.Height())
+	require.EqualValues(377122, blk3.Header.GasUsed())
+	require.EqualValues(action.InitialBaseFee, blk3.Header.BaseFee().Uint64())
+	require.Equal(7, len(blk3.Body.Actions))
+	require.NoError(bc.CommitBlock(blk3))
+
+	// verify contract execution
+	r, err = receiptByActionHash(dao, 4, contractHash)
+	require.NoError(err)
+	require.EqualValues(iotextypes.ReceiptStatus_Success, r.Status)
+	require.EqualValues(4, r.BlockHeight)
+	require.Equal(contractHash, r.ActionHash)
+	require.EqualValues(20020, r.GasConsumed)
+	require.Empty(r.ContractAddress)
+	logs = r.Logs()
+	require.Equal(1, len(logs))
+	require.Equal(_sarTopic, logs[0].Topics[1][:])
+	require.True(blk3.Header.LogsBloomfilter().Exist(_sarTopic))
+
+	// verify claim reward
+	a, err := accountutil.AccountState(ctx, sf, producer)
+	require.NoError(err)
+	require.EqualValues(1, a.AccountType())
+	require.Equal("200000000000", a.Balance.String())
+
+	// verify EIP-6780 selfdestruct contract address
+	for _, v := range []struct {
+		h      hash.Hash256
+		txType string
+		gas    uint64
+	}{
+		{MustNoErrorV(ex1.Hash()), "selfdestruct", 269559},
+		{MustNoErrorV(ex2.Hash()), "selfdestruct-oncreation", 49724},
+		{MustNoErrorV(ex3.Hash()), "selfdestruct-afterwards", 17819},
+	} {
+		r = MustNoErrorV(receiptByActionHash(dao, 4, v.h))
+		require.EqualValues(1, r.Status)
+		require.EqualValues(v.gas, r.GasConsumed)
+		if v.txType == "selfdestruct" {
+			require.Equal(selfdestructContract, r.ContractAddress)
+			a = MustNoErrorV(accountutil.AccountState(ctx, sf, MustNoErrorV(address.FromString(r.ContractAddress))))
+			require.True(a.IsContract())
+			require.False(a.IsNewbieAccount())
+		} else if v.txType == "selfdestruct-oncreation" {
+			a = MustNoErrorV(accountutil.AccountState(ctx, sf, MustNoErrorV(address.FromString(r.ContractAddress))))
+			require.False(a.IsContract())
+			require.True(a.IsNewbieAccount())
+		}
+	}
+
+	// commit 4 blocks to a new chain
 	testTriePath2, err := testutil.PathOfTempFile("trie")
 	require.NoError(err)
 	testDBPath2, err := testutil.PathOfTempFile("db")
@@ -1248,6 +1396,7 @@ func TestConvertCleanAddress(t *testing.T) {
 	cfg.Chain.IndexDBPath = testIndexPath2
 	bc2, sf2, dao2, _, err := createChain(cfg, false)
 	require.NoError(err)
+	require.NoError(sf2.Register(pp))
 	require.NoError(bc2.Start(ctx))
 	defer func() {
 		require.NoError(bc2.Stop(ctx))
@@ -1258,6 +1407,9 @@ func TestConvertCleanAddress(t *testing.T) {
 	require.NoError(bc2.CommitBlock(blk1))
 	require.NoError(bc2.ValidateBlock(blk2))
 	require.NoError(bc2.CommitBlock(blk2))
+	require.NoError(bc2.ValidateBlock(blk3))
+	require.NoError(bc2.CommitBlock(blk3))
+	require.EqualValues(4, bc2.TipHeight())
 
 	// 4 legacy fresh accounts are converted to zero-nonce account
 	for _, v := range []struct {
@@ -1265,9 +1417,9 @@ func TestConvertCleanAddress(t *testing.T) {
 		nonce uint64
 		b     string
 	}{
-		{identityset.Address(23), 2, "99999999980000000000029700"},
-		{identityset.Address(24), 2, "99999999952880000000009900"},
-		{identityset.Address(25), 3, "99999999970000000000009500"},
+		{identityset.Address(23), 2, "99999999980000000000029800"},
+		{identityset.Address(24), 3, "99999999932860000000010100"},
+		{identityset.Address(25), 2, "99999999980000000000009800"},
 		{deterministic, 1, "6786100000000000"},
 	} {
 		a, err := accountutil.AccountState(ctx, sf2, v.a)
@@ -1278,21 +1430,27 @@ func TestConvertCleanAddress(t *testing.T) {
 	}
 
 	// verify deterministic deployment transaction
-	r, err = receiptByActionHash(dao2, 2, h)
+	r, err = receiptByActionHash(dao2, 2, deterministicTxHash)
 	require.NoError(err)
 	require.EqualValues(iotextypes.ReceiptStatus_Success, r.Status)
 	require.EqualValues(2, r.BlockHeight)
-	require.Equal(h, r.ActionHash)
+	require.Equal(deterministicTxHash, r.ActionHash)
 	require.EqualValues(32139, r.GasConsumed)
 	require.Equal("io1fevmgjz8kdu40pvgjgx20ralymqtf9tv3mdu7f", r.ContractAddress)
 	tl, err = dao2.TransactionLogs(2)
 	require.NoError(err)
 	require.Equal(4, len(tl.Logs))
+
+	// verify claim reward
+	a, err = accountutil.AccountState(ctx, sf2, producer)
+	require.NoError(err)
+	require.EqualValues(1, a.AccountType())
+	require.Equal("200000000000", a.Balance.String())
 }
 
 func TestConstantinople(t *testing.T) {
-	require := require.New(t)
 	testValidateBlockchain := func(cfg config.Config, t *testing.T) {
+		require := require.New(t)
 		ctx := context.Background()
 
 		registry := protocol.NewRegistry()
@@ -1300,7 +1458,7 @@ func TestConstantinople(t *testing.T) {
 		factoryCfg := factory.GenerateConfig(cfg.Chain, cfg.Genesis)
 		db2, err := db.CreateKVStore(cfg.DB, cfg.Chain.TrieDBPath)
 		require.NoError(err)
-		sf, err := factory.NewFactory(factoryCfg, db2, factory.RegistryOption(registry))
+		sf, err := factory.NewStateDB(factoryCfg, db2, factory.RegistryStateDBOption(registry))
 		require.NoError(err)
 		ap, err := actpool.NewActPool(cfg.Genesis, sf, cfg.ActPool)
 		require.NoError(err)
@@ -1328,7 +1486,7 @@ func TestConstantinople(t *testing.T) {
 				protocol.NewGenericValidator(sf, accountutil.AccountState),
 			)),
 		)
-		ep := execution.NewProtocol(dao.GetBlockHash, rewarding.DepositGasWithSGD, nil, fakeGetBlockTime)
+		ep := execution.NewProtocol(dao.GetBlockHash, rewarding.DepositGas, fakeGetBlockTime)
 		require.NoError(ep.Register(registry))
 		rewardingProtocol := rewarding.NewProtocol(cfg.Genesis.Rewarding)
 		require.NoError(rewardingProtocol.Register(registry))
@@ -1352,43 +1510,43 @@ func TestConstantinople(t *testing.T) {
 			{
 				1,
 				_deployHash,
-				"2861aecf2b3f91822de00c9f42ca44276e386ac693df363770783bfc133346c3",
+				"d0913e38fb63b8ec7fe5ccdee098f5a3e05770f5c9f7e20b1aebc833cfc4a1e8",
 				nil,
 			},
 			{
 				2,
 				_setHash,
-				"cb0f7895c1fa4f179c0c109835b160d9d1852fce526e12c6b443e86257cadb48",
+				"a968af4cd63da732ddcae27f3ba2e0c2be34b0bba47eaa4c5fe5d9eb483a8a53",
 				_setTopic,
 			},
 			{
 				3,
 				_shrHash,
-				"c1337e26e157426dd0af058ed37e329d25dd3e34ed606994a6776b59f988f458",
+				"f7728c6edaeee88c8c23390a78c711074fb05a3b6c67446abb3f9a666cd3f474",
 				_shrTopic,
 			},
 			{
 				4,
 				_shlHash,
-				"cf5c2050a261fa7eca45f31a184c6cd1dc737c7fc3088a0983f659b08985521c",
+				"7ace333e5b394d729497890f90e879180551f4f4bf8813f273d247eee3f6b1cd",
 				_shlTopic,
 			},
 			{
 				5,
 				_sarHash,
-				"5d76bd9e4be3a60c00761fd141da6bd9c07ab73f472f537845b65679095b0570",
+				"96e703f1afd4c7e0df8b91eee57db730a0c5d78cc87fd050596f4eab4f33704e",
 				_sarTopic,
 			},
 			{
 				6,
 				_extHash,
-				"c5fd9f372b89265f2423737a6d7b680e9759a4a715b22b04ccf875460c310015",
+				"30d8205e93b1eae9c26e3f144b7f0d5c2c809d07d2f287be3577566b4655e091",
 				_extTopic,
 			},
 			{
 				7,
 				_crt2Hash,
-				"53632287a97e4e118302f2d9b54b3f97f62d3533286c4d4eb955627b3602d3b0",
+				"01696409becb6b2585e84c3bd69decbb79a2d38fe14fb1a74cea02dd2e41b4d4",
 				_crt2Topic,
 			},
 		}
@@ -1503,6 +1661,7 @@ func TestConstantinople(t *testing.T) {
 		}
 	}
 
+	require := require.New(t)
 	cfg := config.Default
 	testTriePath, err := testutil.PathOfTempFile("trie")
 	require.NoError(err)
@@ -1523,7 +1682,7 @@ func TestConstantinople(t *testing.T) {
 	cfg.Chain.ChainDBPath = testDBPath
 	cfg.Chain.IndexDBPath = testIndexPath
 	cfg.Chain.ProducerPrivKey = "a000000000000000000000000000000000000000000000000000000000000000"
-	cfg.Genesis.EnableGravityChainVoting = false
+	cfg.Genesis = genesis.TestDefault()
 	cfg.Plugins[config.GatewayPlugin] = true
 	cfg.Chain.EnableAsyncIndexWrite = false
 	cfg.ActPool.MinGasPriceStr = "0"
@@ -1538,8 +1697,8 @@ func TestConstantinople(t *testing.T) {
 }
 
 func TestLoadBlockchainfromDB(t *testing.T) {
-	require := require.New(t)
 	testValidateBlockchain := func(cfg config.Config, t *testing.T) {
+		require := require.New(t)
 		ctx := genesis.WithGenesisContext(context.Background(), cfg.Genesis)
 
 		registry := protocol.NewRegistry()
@@ -1547,7 +1706,7 @@ func TestLoadBlockchainfromDB(t *testing.T) {
 		factoryCfg := factory.GenerateConfig(cfg.Chain, cfg.Genesis)
 		db2, err := db.CreateKVStore(cfg.DB, cfg.Chain.TrieDBPath)
 		require.NoError(err)
-		sf, err := factory.NewFactory(factoryCfg, db2, factory.RegistryOption(registry))
+		sf, err := factory.NewStateDB(factoryCfg, db2, factory.RegistryStateDBOption(registry))
 		require.NoError(err)
 		ap, err := actpool.NewActPool(cfg.Genesis, sf, cfg.ActPool)
 		require.NoError(err)
@@ -1581,7 +1740,7 @@ func TestLoadBlockchainfromDB(t *testing.T) {
 				protocol.NewGenericValidator(sf, accountutil.AccountState),
 			)),
 		)
-		ep := execution.NewProtocol(dao.GetBlockHash, rewarding.DepositGasWithSGD, nil, fakeGetBlockTime)
+		ep := execution.NewProtocol(dao.GetBlockHash, rewarding.DepositGas, fakeGetBlockTime)
 		require.NoError(ep.Register(registry))
 		require.NoError(bc.Start(ctx))
 
@@ -1594,7 +1753,7 @@ func TestLoadBlockchainfromDB(t *testing.T) {
 		require.NoError(addTestingTsfBlocks(cfg, bc, dao, ap))
 		//make sure pubsub is completed
 		err = testutil.WaitUntil(200*time.Millisecond, 3*time.Second, func() (bool, error) {
-			return 24 == ms.Counter(), nil
+			return ms.Counter() == 24, nil
 		})
 		require.NoError(err)
 		require.NoError(bc.Stop(ctx))
@@ -1647,7 +1806,7 @@ func TestLoadBlockchainfromDB(t *testing.T) {
 		fmt.Printf("Current tip = %d hash = %x\n", h, blkhash)
 
 		// add block with wrong height
-		selp, err := action.SignedTransfer(identityset.Address(29).String(), identityset.PrivateKey(27), 1, big.NewInt(50), nil, genesis.Default.ActionGasLimit, big.NewInt(0))
+		selp, err := action.SignedTransfer(identityset.Address(29).String(), identityset.PrivateKey(27), 1, big.NewInt(50), nil, cfg.Genesis.ActionGasLimit, big.NewInt(0))
 		require.NoError(err)
 
 		nblk, err := block.NewTestingBuilder().
@@ -1661,7 +1820,7 @@ func TestLoadBlockchainfromDB(t *testing.T) {
 		fmt.Printf("Cannot validate block %d: %v\n", header.Height(), err)
 
 		// add block with zero prev hash
-		selp2, err := action.SignedTransfer(identityset.Address(29).String(), identityset.PrivateKey(27), 1, big.NewInt(50), nil, genesis.Default.ActionGasLimit, big.NewInt(0))
+		selp2, err := action.SignedTransfer(identityset.Address(29).String(), identityset.PrivateKey(27), 1, big.NewInt(50), nil, cfg.Genesis.ActionGasLimit, big.NewInt(0))
 		require.NoError(err)
 
 		nblk, err = block.NewTestingBuilder().
@@ -1764,6 +1923,7 @@ func TestLoadBlockchainfromDB(t *testing.T) {
 		}
 	}
 
+	require := require.New(t)
 	testTriePath, err := testutil.PathOfTempFile("trie")
 	require.NoError(err)
 	testDBPath, err := testutil.PathOfTempFile("db")
@@ -1778,13 +1938,13 @@ func TestLoadBlockchainfromDB(t *testing.T) {
 	}()
 
 	cfg := config.Default
+	cfg.Genesis = genesis.TestDefault()
 	cfg.Chain.TrieDBPath = testTriePath
 	cfg.Chain.ChainDBPath = testDBPath
 	cfg.Chain.IndexDBPath = testIndexPath
-	cfg.Genesis.EnableGravityChainVoting = false
 	cfg.ActPool.MinGasPriceStr = "0"
 	genesis.SetGenesisTimestamp(cfg.Genesis.Timestamp)
-	block.LoadGenesisHash(&genesis.Default)
+	block.LoadGenesisHash(&cfg.Genesis)
 
 	t.Run("load blockchain from DB w/o explorer", func(t *testing.T) {
 		testValidateBlockchain(cfg, t)
@@ -1860,6 +2020,7 @@ func TestBlockchainInitialCandidate(t *testing.T) {
 	require.NoError(err)
 
 	cfg := config.Default
+	cfg.Genesis = genesis.TestDefault()
 	cfg.Chain.TrieDBPath = testTriePath
 	cfg.Chain.ChainDBPath = testDBPath
 	cfg.Chain.IndexDBPath = testIndexPath
@@ -1868,7 +2029,7 @@ func TestBlockchainInitialCandidate(t *testing.T) {
 	factoryCfg := factory.GenerateConfig(cfg.Chain, cfg.Genesis)
 	db2, err := db.CreateKVStore(cfg.DB, cfg.Chain.TrieDBPath)
 	require.NoError(err)
-	sf, err := factory.NewFactory(factoryCfg, db2, factory.RegistryOption(registry))
+	sf, err := factory.NewStateDB(factoryCfg, db2, factory.RegistryStateDBOption(registry))
 	require.NoError(err)
 	ap, err := actpool.NewActPool(cfg.Genesis, sf, cfg.ActPool)
 	require.NoError(err)
@@ -1887,9 +2048,9 @@ func TestBlockchainInitialCandidate(t *testing.T) {
 		blockchain.BlockValidatorOption(sf),
 	)
 	rolldposProtocol := rolldpos.NewProtocol(
-		genesis.Default.NumCandidateDelegates,
-		genesis.Default.NumDelegates,
-		genesis.Default.NumSubEpochs,
+		cfg.Genesis.NumCandidateDelegates,
+		cfg.Genesis.NumDelegates,
+		cfg.Genesis.NumSubEpochs,
 	)
 	require.NoError(rolldposProtocol.Register(registry))
 	rewardingProtocol := rewarding.NewProtocol(cfg.Genesis.Rewarding)
@@ -1913,12 +2074,13 @@ func TestBlockchain_AccountState(t *testing.T) {
 	require := require.New(t)
 
 	cfg := config.Default
+	cfg.Genesis = genesis.TestDefault()
 	ctx := genesis.WithGenesisContext(context.Background(), cfg.Genesis)
 	registry := protocol.NewRegistry()
 	acc := account.NewProtocol(rewarding.DepositGas)
 	require.NoError(acc.Register(registry))
 	factoryCfg := factory.GenerateConfig(cfg.Chain, cfg.Genesis)
-	sf, err := factory.NewFactory(factoryCfg, db.NewMemKVStore(), factory.RegistryOption(registry))
+	sf, err := factory.NewStateDB(factoryCfg, db.NewMemKVStore(), factory.RegistryStateDBOption(registry))
 	require.NoError(err)
 	ap, err := actpool.NewActPool(cfg.Genesis, sf, cfg.ActPool)
 	require.NoError(err)
@@ -1943,13 +2105,14 @@ func TestNewAccountAction(t *testing.T) {
 	require := require.New(t)
 
 	cfg := config.Default
+	cfg.Genesis = genesis.TestDefault()
 	cfg.Genesis.OkhotskBlockHeight = 1
 	ctx := genesis.WithGenesisContext(context.Background(), cfg.Genesis)
 	registry := protocol.NewRegistry()
 	acc := account.NewProtocol(rewarding.DepositGas)
 	require.NoError(acc.Register(registry))
 	factoryCfg := factory.GenerateConfig(cfg.Chain, cfg.Genesis)
-	sf, err := factory.NewFactory(factoryCfg, db.NewMemKVStore(), factory.RegistryOption(registry))
+	sf, err := factory.NewStateDB(factoryCfg, db.NewMemKVStore(), factory.RegistryStateDBOption(registry))
 	require.NoError(err)
 	ap, err := actpool.NewActPool(cfg.Genesis, sf, cfg.ActPool)
 	require.NoError(err)
@@ -1996,7 +2159,7 @@ func TestNewAccountAction(t *testing.T) {
 		}
 		ctx = genesis.WithGenesisContext(context.Background(), cfg.Genesis)
 		factoryCfg = factory.GenerateConfig(cfg.Chain, cfg.Genesis)
-		sf1, err := factory.NewFactory(factoryCfg, db.NewMemKVStore(), factory.RegistryOption(registry))
+		sf1, err := factory.NewStateDB(factoryCfg, db.NewMemKVStore(), factory.RegistryStateDBOption(registry))
 		require.NoError(err)
 		store, err := filedao.NewFileDAOInMemForTest()
 		require.NoError(err)
@@ -2050,6 +2213,7 @@ func TestBlocks(t *testing.T) {
 	cfg.Chain.TrieDBPath = testTriePath
 	cfg.Chain.ChainDBPath = testDBPath
 	cfg.Chain.IndexDBPath = testIndexPath
+	cfg.Genesis = genesis.TestDefault()
 	cfg.Genesis.InitBalanceMap[identityset.Address(27).String()] = unit.ConvertIotxToRau(10000000000).String()
 	cfg.Genesis.InitBalanceMap[a] = "100000"
 	cfg.Genesis.InitBalanceMap[c] = "100000"
@@ -2058,7 +2222,7 @@ func TestBlocks(t *testing.T) {
 	acc := account.NewProtocol(rewarding.DepositGas)
 	require.NoError(acc.Register(registry))
 	factoryCfg := factory.GenerateConfig(cfg.Chain, cfg.Genesis)
-	sf, err := factory.NewFactory(factoryCfg, db.NewMemKVStore(), factory.RegistryOption(registry))
+	sf, err := factory.NewStateDB(factoryCfg, db.NewMemKVStore(), factory.RegistryStateDBOption(registry))
 	require.NoError(err)
 	ap, err := actpool.NewActPool(cfg.Genesis, sf, cfg.ActPool)
 	require.NoError(err)
@@ -2105,6 +2269,7 @@ func TestActions(t *testing.T) {
 	require := require.New(t)
 	cfg := config.Default
 
+	cfg.Genesis = genesis.TestDefault()
 	registry := protocol.NewRegistry()
 	acc := account.NewProtocol(rewarding.DepositGas)
 	require.NoError(acc.Register(registry))
@@ -2132,7 +2297,7 @@ func TestActions(t *testing.T) {
 	cfg.Genesis.InitBalanceMap[a] = "100000"
 	cfg.Genesis.InitBalanceMap[c] = "100000"
 	factoryCfg := factory.GenerateConfig(cfg.Chain, cfg.Genesis)
-	sf, err := factory.NewFactory(factoryCfg, db.NewMemKVStore(), factory.RegistryOption(registry))
+	sf, err := factory.NewStateDB(factoryCfg, db.NewMemKVStore(), factory.RegistryStateDBOption(registry))
 	require.NoError(err)
 	ap, err := actpool.NewActPool(cfg.Genesis, sf, cfg.ActPool)
 	require.NoError(err)
@@ -2193,12 +2358,13 @@ func TestActions(t *testing.T) {
 func TestBlockchain_AddRemoveSubscriber(t *testing.T) {
 	req := require.New(t)
 	cfg := config.Default
+	cfg.Genesis = genesis.TestDefault()
 	cfg.Genesis.BlockGasLimit = uint64(100000)
 	cfg.Genesis.EnableGravityChainVoting = false
 	// create chain
 	registry := protocol.NewRegistry()
 	factoryCfg := factory.GenerateConfig(cfg.Chain, cfg.Genesis)
-	sf, err := factory.NewFactory(factoryCfg, db.NewMemKVStore(), factory.RegistryOption(registry))
+	sf, err := factory.NewStateDB(factoryCfg, db.NewMemKVStore(), factory.RegistryStateDBOption(registry))
 	req.NoError(err)
 	ap, err := actpool.NewActPool(cfg.Genesis, sf, cfg.ActPool)
 	req.NoError(err)
@@ -2217,13 +2383,8 @@ func TestBlockchain_AddRemoveSubscriber(t *testing.T) {
 }
 
 func TestHistoryForAccount(t *testing.T) {
-	testHistoryForAccount(t, false)
-	testHistoryForAccount(t, true)
-}
-
-func testHistoryForAccount(t *testing.T, statetx bool) {
 	require := require.New(t)
-	bc, sf, _, _, ap := newChain(t, statetx)
+	bc, sf, _, _, ap := newChain(t)
 	a := identityset.Address(28)
 	priKeyA := identityset.PrivateKey(28)
 	b := identityset.Address(29)
@@ -2257,29 +2418,13 @@ func testHistoryForAccount(t *testing.T, statetx bool) {
 	require.Equal(big.NewInt(110), AccountB.Balance)
 
 	// check history account's balance
-	if statetx {
-		_, err = accountutil.AccountState(ctx, factory.NewHistoryStateReader(sf, bc.TipHeight()-1), a)
-		require.Equal(factory.ErrNotSupported, errors.Cause(err))
-		_, err = accountutil.AccountState(ctx, factory.NewHistoryStateReader(sf, bc.TipHeight()-1), b)
-		require.Equal(factory.ErrNotSupported, errors.Cause(err))
-	} else {
-		AccountA, err = accountutil.AccountState(ctx, factory.NewHistoryStateReader(sf, bc.TipHeight()-1), a)
-		require.NoError(err)
-		AccountB, err = accountutil.AccountState(ctx, factory.NewHistoryStateReader(sf, bc.TipHeight()-1), b)
-		require.NoError(err)
-		require.Equal(big.NewInt(100), AccountA.Balance)
-		require.Equal(big.NewInt(100), AccountB.Balance)
-	}
+	_, err = sf.WorkingSetAtHeight(ctx, 0)
+	require.NoError(err)
 }
 
 func TestHistoryForContract(t *testing.T) {
-	testHistoryForContract(t, false)
-	testHistoryForContract(t, true)
-}
-
-func testHistoryForContract(t *testing.T, statetx bool) {
 	require := require.New(t)
-	bc, sf, _, dao, ap := newChain(t, statetx)
+	bc, sf, _, dao, ap := newChain(t)
 	ctx := genesis.WithGenesisContext(context.Background(), bc.Genesis())
 	genesisAccount := identityset.Address(27).String()
 	// deploy and get contract address
@@ -2305,18 +2450,8 @@ func testHistoryForContract(t *testing.T, statetx bool) {
 	require.Equal(expect, balance)
 
 	// check the the original balance again
-	if statetx {
-		_, err = accountutil.AccountState(ctx, factory.NewHistoryStateReader(sf, bc.TipHeight()-1), contractAddr)
-		require.True(errors.Cause(err) == factory.ErrNotSupported)
-	} else {
-		sr := factory.NewHistoryStateReader(sf, bc.TipHeight()-1)
-		account, err = accountutil.AccountState(ctx, sr, contractAddr)
-		require.NoError(err)
-		balance = BalanceOfContract(contract, genesisAccount, sr, t, account.Root)
-		expect, ok = new(big.Int).SetString("2000000000000000000000000000", 10)
-		require.True(ok)
-		require.Equal(expect, balance)
-	}
+	_, err = sf.WorkingSetAtHeight(ctx, bc.TipHeight()-1)
+	require.NoError(err)
 }
 
 func deployXrc20(bc blockchain.Blockchain, dao blockdao.BlockDAO, ap actpool.ActPool, t *testing.T) string {
@@ -2325,8 +2460,7 @@ func deployXrc20(bc blockchain.Blockchain, dao blockdao.BlockDAO, ap actpool.Act
 	// deploy a xrc20 contract with balance 2000000000000000000000000000
 	data, err := hex.DecodeString("60806040526002805460ff1916601217905534801561001d57600080fd5b506040516107cd3803806107cd83398101604090815281516020808401518385015160025460ff16600a0a84026003819055336000908152600485529586205590850180519395909491019261007592850190610092565b508051610089906001906020840190610092565b5050505061012d565b828054600181600116156101000203166002900490600052602060002090601f016020900481019282601f106100d357805160ff1916838001178555610100565b82800160010185558215610100579182015b828111156101005782518255916020019190600101906100e5565b5061010c929150610110565b5090565b61012a91905b8082111561010c5760008155600101610116565b90565b6106918061013c6000396000f3006080604052600436106100ae5763ffffffff7c010000000000000000000000000000000000000000000000000000000060003504166306fdde0381146100b3578063095ea7b31461013d57806318160ddd1461017557806323b872dd1461019c578063313ce567146101c657806342966c68146101f1578063670d14b21461020957806370a082311461022a57806395d89b411461024b578063a9059cbb14610260578063dd62ed3e14610286575b600080fd5b3480156100bf57600080fd5b506100c86102ad565b6040805160208082528351818301528351919283929083019185019080838360005b838110156101025781810151838201526020016100ea565b50505050905090810190601f16801561012f5780820380516001836020036101000a031916815260200191505b509250505060405180910390f35b34801561014957600080fd5b50610161600160a060020a036004351660243561033b565b604080519115158252519081900360200190f35b34801561018157600080fd5b5061018a610368565b60408051918252519081900360200190f35b3480156101a857600080fd5b50610161600160a060020a036004358116906024351660443561036e565b3480156101d257600080fd5b506101db6103dd565b6040805160ff9092168252519081900360200190f35b3480156101fd57600080fd5b506101616004356103e6565b34801561021557600080fd5b506100c8600160a060020a036004351661045e565b34801561023657600080fd5b5061018a600160a060020a03600435166104c6565b34801561025757600080fd5b506100c86104d8565b34801561026c57600080fd5b50610284600160a060020a0360043516602435610532565b005b34801561029257600080fd5b5061018a600160a060020a0360043581169060243516610541565b6000805460408051602060026001851615610100026000190190941693909304601f810184900484028201840190925281815292918301828280156103335780601f1061030857610100808354040283529160200191610333565b820191906000526020600020905b81548152906001019060200180831161031657829003601f168201915b505050505081565b336000908152600560209081526040808320600160a060020a039590951683529390529190912055600190565b60035481565b600160a060020a038316600090815260056020908152604080832033845290915281205482111561039e57600080fd5b600160a060020a03841660009081526005602090815260408083203384529091529020805483900390556103d384848461055e565b5060019392505050565b60025460ff1681565b3360009081526004602052604081205482111561040257600080fd5b3360008181526004602090815260409182902080548690039055600380548690039055815185815291517fcc16f5dbb4873280815c1ee09dbd06736cffcc184412cf7a71a0fdb75d397ca59281900390910190a2506001919050565b60066020908152600091825260409182902080548351601f6002600019610100600186161502019093169290920491820184900484028101840190945280845290918301828280156103335780601f1061030857610100808354040283529160200191610333565b60046020526000908152604090205481565b60018054604080516020600284861615610100026000190190941693909304601f810184900484028201840190925281815292918301828280156103335780601f1061030857610100808354040283529160200191610333565b61053d33838361055e565b5050565b600560209081526000928352604080842090915290825290205481565b6000600160a060020a038316151561057557600080fd5b600160a060020a03841660009081526004602052604090205482111561059a57600080fd5b600160a060020a038316600090815260046020526040902054828101116105c057600080fd5b50600160a060020a038083166000818152600460209081526040808320805495891680855282852080548981039091559486905281548801909155815187815291519390950194927fddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef929181900390910190a3600160a060020a0380841660009081526004602052604080822054928716825290205401811461065f57fe5b505050505600a165627a7a723058207c03ad12a18902cfe387e684509d310abd583d862c11e3ee80c116af8b49ec5c00290000000000000000000000000000000000000000000000000000000077359400000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000004696f7478000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004696f747800000000000000000000000000000000000000000000000000000000")
 	require.NoError(err)
-	execution, err := action.NewExecution(action.EmptyAddress, 3, big.NewInt(0), 1000000, big.NewInt(testutil.TestGasPriceInt64), data)
-	require.NoError(err)
+	execution := action.NewExecution(action.EmptyAddress, big.NewInt(0), data)
 	bd := &action.EnvelopeBuilder{}
 	elp := bd.SetAction(execution).
 		SetNonce(3).
@@ -2379,7 +2513,7 @@ func BalanceOfContract(contract, genesisAccount string, sr protocol.StateReader,
 	return big.NewInt(0).SetBytes(ret)
 }
 
-func newChain(t *testing.T, stateTX bool) (blockchain.Blockchain, factory.Factory, db.KVStore, blockdao.BlockDAO, actpool.ActPool) {
+func newChain(t *testing.T) (blockchain.Blockchain, factory.Factory, db.KVStore, blockdao.BlockDAO, actpool.ActPool) {
 	require := require.New(t)
 	cfg := config.Default
 
@@ -2402,18 +2536,14 @@ func newChain(t *testing.T, stateTX bool) (blockchain.Blockchain, factory.Factor
 	cfg.Consensus.Scheme = config.RollDPoSScheme
 	cfg.Genesis.BlockGasLimit = uint64(1000000)
 	cfg.ActPool.MinGasPriceStr = "0"
-	cfg.Genesis.EnableGravityChainVoting = false
+	cfg.Genesis = genesis.TestDefault()
 	registry := protocol.NewRegistry()
 	var sf factory.Factory
 	kv := db.NewMemKVStore()
 	factoryCfg := factory.GenerateConfig(cfg.Chain, cfg.Genesis)
-	if stateTX {
-		sf, err = factory.NewStateDB(factoryCfg, kv, factory.RegistryStateDBOption(registry))
-		require.NoError(err)
-	} else {
-		sf, err = factory.NewFactory(factoryCfg, kv, factory.RegistryOption(registry))
-		require.NoError(err)
-	}
+	sf, err = factory.NewStateDB(factoryCfg, kv, factory.RegistryStateDBOption(registry))
+	require.NoError(err)
+
 	ap, err := actpool.NewActPool(cfg.Genesis, sf, cfg.ActPool)
 	require.NoError(err)
 	acc := account.NewProtocol(rewarding.DepositGas)
@@ -2447,7 +2577,7 @@ func newChain(t *testing.T, stateTX bool) (blockchain.Blockchain, factory.Factor
 		)),
 	)
 	require.NotNil(bc)
-	ep := execution.NewProtocol(dao.GetBlockHash, rewarding.DepositGasWithSGD, nil, fakeGetBlockTime)
+	ep := execution.NewProtocol(dao.GetBlockHash, rewarding.DepositGas, fakeGetBlockTime)
 	require.NoError(ep.Register(registry))
 	require.NoError(bc.Start(context.Background()))
 
@@ -2473,8 +2603,7 @@ func makeTransfer(contract string, bc blockchain.Blockchain, ap actpool.ActPool,
 	// make a transfer for contract,transfer 1 to io16eur00s9gdvak4ujhpuk9a45x24n60jgecgxzz
 	bytecode, err := hex.DecodeString("a9059cbb0000000000000000000000004867c4bada9553216bf296c4c64e9ff0749206490000000000000000000000000000000000000000000000000000000000000001")
 	require.NoError(err)
-	execution, err := action.NewExecution(contract, 4, big.NewInt(0), 1000000, big.NewInt(testutil.TestGasPriceInt64), bytecode)
-	require.NoError(err)
+	execution := action.NewExecution(contract, big.NewInt(0), bytecode)
 	bd := &action.EnvelopeBuilder{}
 	elp := bd.SetAction(execution).
 		SetNonce(4).

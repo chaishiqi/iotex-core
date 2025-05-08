@@ -3,7 +3,8 @@ package evm
 import (
 	"context"
 
-	"github.com/iotexproject/iotex-core/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
 )
 
 type (
@@ -13,9 +14,7 @@ type (
 	HelperContext struct {
 		GetBlockHash   GetBlockHash
 		GetBlockTime   GetBlockTime
-		DepositGasFunc DepositGasWithSGD
-		// TODO: sgd should be moved into depositGasFunc
-		Sgd SGDRegistry
+		DepositGasFunc protocol.DepositGas
 	}
 )
 

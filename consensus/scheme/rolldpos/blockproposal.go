@@ -7,9 +7,9 @@ package rolldpos
 
 import (
 	"github.com/iotexproject/go-pkgs/hash"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/endorsement"
-	"github.com/iotexproject/iotex-core/pkg/util/byteutil"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/endorsement"
+	"github.com/iotexproject/iotex-core/v2/pkg/util/byteutil"
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 	"google.golang.org/protobuf/proto"
 )
@@ -34,11 +34,7 @@ func (bp *blockProposal) Proto() (*iotextypes.BlockProposal, error) {
 	bPb := bp.block.ConvertToBlockPb()
 	endorsements := []*iotextypes.Endorsement{}
 	for _, en := range bp.proofOfLock {
-		ePb, err := en.Proto()
-		if err != nil {
-			return nil, err
-		}
-		endorsements = append(endorsements, ePb)
+		endorsements = append(endorsements, en.Proto())
 	}
 	return &iotextypes.BlockProposal{
 		Block:        bPb,

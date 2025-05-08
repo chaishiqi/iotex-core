@@ -14,9 +14,9 @@ import (
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 	"github.com/spf13/cobra"
 
-	"github.com/iotexproject/iotex-core/ioctl/config"
-	"github.com/iotexproject/iotex-core/ioctl/output"
-	"github.com/iotexproject/iotex-core/ioctl/util"
+	"github.com/iotexproject/iotex-core/v2/ioctl/config"
+	"github.com/iotexproject/iotex-core/v2/ioctl/output"
+	"github.com/iotexproject/iotex-core/v2/ioctl/util"
 )
 
 const (
@@ -110,7 +110,7 @@ func getBucketList(method, addr string, args ...string) (err error) {
 	return output.NewError(output.InputError, "unknown <method>", nil)
 }
 
-// getBucketList get bucket list from chain by voter address
+// getBucketListByVoter get bucket list from chain by voter address
 func getBucketListByVoter(addr string, offset, limit uint32) error {
 	address, err := util.GetAddress(addr)
 	if err != nil {

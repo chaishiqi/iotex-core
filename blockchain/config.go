@@ -8,6 +8,7 @@ package blockchain
 import (
 	"crypto/ecdsa"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/iotexproject/go-pkgs/crypto"
@@ -17,23 +18,26 @@ import (
 	"go.uber.org/config"
 	"go.uber.org/zap"
 
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
 )
 
 type (
 	// Config is the config struct for blockchain package
 	Config struct {
-		ChainDBPath                string           `yaml:"chainDBPath"`
-		TrieDBPatchFile            string           `yaml:"trieDBPatchFile"`
-		TrieDBPath                 string           `yaml:"trieDBPath"`
-		StakingPatchDir            string           `yaml:"stakingPatchDir"`
-		IndexDBPath                string           `yaml:"indexDBPath"`
-		BloomfilterIndexDBPath     string           `yaml:"bloomfilterIndexDBPath"`
-		CandidateIndexDBPath       string           `yaml:"candidateIndexDBPath"`
-		StakingIndexDBPath         string           `yaml:"stakingIndexDBPath"`
+		ChainDBPath            string `yaml:"chainDBPath"`
+		TrieDBPatchFile        string `yaml:"trieDBPatchFile"`
+		TrieDBPath             string `yaml:"trieDBPath"`
+		StakingPatchDir        string `yaml:"stakingPatchDir"`
+		IndexDBPath            string `yaml:"indexDBPath"`
+		BloomfilterIndexDBPath string `yaml:"bloomfilterIndexDBPath"`
+		CandidateIndexDBPath   string `yaml:"candidateIndexDBPath"`
+		StakingIndexDBPath     string `yaml:"stakingIndexDBPath"`
+		// deprecated
 		SGDIndexDBPath             string           `yaml:"sgdIndexDBPath"`
 		ContractStakingIndexDBPath string           `yaml:"contractStakingIndexDBPath"`
+		BlobStoreDBPath            string           `yaml:"blobStoreDBPath"`
+		BlobStoreRetentionDays     uint32           `yaml:"blobStoreRetentionDays"`
 		ID                         uint32           `yaml:"id"`
 		EVMNetworkID               uint32           `yaml:"evmNetworkID"`
 		Address                    string           `yaml:"address"`
@@ -44,6 +48,7 @@ type (
 		GravityChainDB             db.Config        `yaml:"gravityChainDB"`
 		Committee                  committee.Config `yaml:"committee"`
 
+		// EnableTrielessStateDB enables trieless state db (deprecated)
 		EnableTrielessStateDB bool `yaml:"enableTrielessStateDB"`
 		// EnableStateDBCaching enables cachedStateDBOption
 		EnableStateDBCaching bool `yaml:"enableStateDBCaching"`
@@ -71,6 +76,12 @@ type (
 		StreamingBlockBufferSize uint64 `yaml:"streamingBlockBufferSize"`
 		// PersistStakingPatchBlock is the block to persist staking patch
 		PersistStakingPatchBlock uint64 `yaml:"persistStakingPatchBlock"`
+		// FixAliasForNonStopHeight is the height to fix candidate alias for a non-stopping node
+		FixAliasForNonStopHeight uint64 `yaml:"fixAliasForNonStopHeight"`
+		// FactoryDBType is the type of factory db
+		FactoryDBType string `yaml:"factoryDBType"`
+		// MintTimeout is the timeout for minting
+		MintTimeout time.Duration `yaml:"-"`
 	}
 )
 
@@ -87,6 +98,8 @@ var (
 		StakingIndexDBPath:         "/var/data/staking.index.db",
 		SGDIndexDBPath:             "/var/data/sgd.index.db",
 		ContractStakingIndexDBPath: "/var/data/contractstaking.index.db",
+		BlobStoreDBPath:            "/var/data/blob.db",
+		BlobStoreRetentionDays:     21,
 		ID:                         1,
 		EVMNetworkID:               4689,
 		Address:                    "",
@@ -111,36 +124,51 @@ var (
 		WorkingSetCacheSize:           20,
 		StreamingBlockBufferSize:      200,
 		PersistStakingPatchBlock:      19778037,
+		FixAliasForNonStopHeight:      19778036,
+		FactoryDBType:                 db.DBBolt,
+		MintTimeout:                   time.Second,
 	}
 
 	// ErrConfig config error
 	ErrConfig = errors.New("config error")
 )
 
-// ProducerAddress returns the configured producer address derived from key
-func (cfg *Config) ProducerAddress() address.Address {
-	sk := cfg.ProducerPrivateKey()
-	addr := sk.PublicKey().Address()
-	if addr == nil {
-		log.L().Panic("Error when constructing producer address")
+// ProducerAddress() returns the configured producer address derived from key
+func (cfg *Config) ProducerAddress() []address.Address {
+	privateKeys := cfg.ProducerPrivateKeys()
+	addrs := make([]address.Address, 0, len(privateKeys))
+	for _, sk := range privateKeys {
+		addr := sk.PublicKey().Address()
+		if addr == nil {
+			log.L().Panic("Error when constructing producer address")
+		}
+		addrs = append(addrs, addr)
 	}
-	return addr
+	return addrs
 }
 
-// ProducerPrivateKey returns the configured private key
-func (cfg *Config) ProducerPrivateKey() crypto.PrivateKey {
-	sk, err := crypto.HexStringToPrivateKey(cfg.ProducerPrivKey)
-	if err != nil {
-		log.L().Panic(
-			"Error when decoding private key",
-			zap.Error(err),
-		)
+// ProducerPrivateKeys returns the configured private keys
+func (cfg *Config) ProducerPrivateKeys() []crypto.PrivateKey {
+	pks := strings.Split(cfg.ProducerPrivKey, ",")
+	if len(pks) == 0 {
+		log.L().Panic("Error when decoding private key")
 	}
+	privateKeys := make([]crypto.PrivateKey, 0, len(pks))
+	for _, pk := range pks {
+		sk, err := crypto.HexStringToPrivateKey(pk)
+		if err != nil {
+			log.L().Panic(
+				"Error when decoding private key",
+				zap.Error(err),
+			)
+		}
 
-	if !cfg.whitelistSignatureScheme(sk) {
-		log.L().Panic("The private key's signature scheme is not whitelisted")
+		if !cfg.whitelistSignatureScheme(sk) {
+			log.L().Panic("The private key's signature scheme is not whitelisted")
+		}
+		privateKeys = append(privateKeys, sk)
 	}
-	return sk
+	return privateKeys
 }
 
 // SetProducerPrivKey set producer privKey by PrivKeyConfigFile info

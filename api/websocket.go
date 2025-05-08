@@ -2,15 +2,18 @@ package api
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
+	"golang.org/x/time/rate"
 
-	apitypes "github.com/iotexproject/iotex-core/api/types"
-	"github.com/iotexproject/iotex-core/pkg/log"
+	apitypes "github.com/iotexproject/iotex-core/v2/api/types"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/pkg/tracer"
 )
 
 const (
@@ -29,7 +32,9 @@ const (
 
 // WebsocketHandler handles requests from websocket protocol
 type WebsocketHandler struct {
-	msgHandler Web3Handler
+	coreService CoreService
+	msgHandler  Web3Handler
+	limiter     *rate.Limiter
 }
 
 var upgrader = websocket.Upgrader{
@@ -45,7 +50,7 @@ type safeWebsocketConn struct {
 	mu sync.Mutex
 }
 
-// WiteJSON writes a JSON message to the connection in a thread-safe way
+// WriteJSON writes a JSON message to the connection in a thread-safe way
 func (c *safeWebsocketConn) WriteJSON(message interface{}) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -72,9 +77,15 @@ func (c *safeWebsocketConn) SetWriteDeadline(t time.Time) error {
 }
 
 // NewWebsocketHandler creates a new websocket handler
-func NewWebsocketHandler(web3Handler Web3Handler) *WebsocketHandler {
+func NewWebsocketHandler(coreService CoreService, web3Handler Web3Handler, limiter *rate.Limiter) *WebsocketHandler {
+	if limiter == nil {
+		// set the limiter to the maximum possible rate
+		limiter = rate.NewLimiter(rate.Limit(math.MaxFloat64), 1)
+	}
 	return &WebsocketHandler{
-		msgHandler: web3Handler,
+		msgHandler:  web3Handler,
+		limiter:     limiter,
+		coreService: coreService,
 	}
 }
 
@@ -104,36 +115,51 @@ func (wsSvr *WebsocketHandler) handleConnection(ctx context.Context, ws *websock
 		return nil
 	})
 
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(WithStreamContext(ctx))
 	safeWs := &safeWebsocketConn{ws: ws}
 	go ping(ctx, safeWs, cancel)
+
+	defer func() {
+		// clean up the stream context
+		sc, _ := StreamFromContext(ctx)
+		for _, id := range sc.ListenerIDs() {
+			wsSvr.coreService.ChainListener().RemoveResponder(id)
+		}
+	}()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
+			if err := wsSvr.limiter.Wait(ctx); err != nil {
+				cancel()
+				return
+			}
 			_, reader, err := ws.NextReader()
 			if err != nil {
 				log.Logger("api").Debug("Client Disconnected", zap.Error(err))
 				cancel()
 				return
 			}
-
-			err = wsSvr.msgHandler.HandlePOSTReq(ctx, reader,
-				apitypes.NewResponseWriter(
-					func(resp interface{}) (int, error) {
-						if err = safeWs.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
-							log.Logger("api").Warn("failed to set write deadline timeout.", zap.Error(err))
-						}
-						return 0, safeWs.WriteJSON(resp)
-					}),
-			)
-			if err != nil {
-				log.Logger("api").Warn("fail to respond request.", zap.Error(err))
-				cancel()
-				return
-			}
+			func() {
+				wsCtx, span := tracer.NewSpan(ctx, "wss")
+				defer span.End()
+				err = wsSvr.msgHandler.HandlePOSTReq(wsCtx, reader,
+					apitypes.NewResponseWriter(
+						func(resp interface{}) (int, error) {
+							if err = safeWs.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+								log.T(wsCtx).Warn("failed to set write deadline timeout.", zap.Error(err))
+							}
+							return 0, safeWs.WriteJSON(resp)
+						}),
+				)
+				if err != nil {
+					log.T(wsCtx).Warn("fail to respond request.", zap.Error(err))
+					cancel()
+					return
+				}
+			}()
 		}
 	}
 }

@@ -15,9 +15,9 @@ import (
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 	"github.com/pkg/errors"
 
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/pkg/util/byteutil"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/pkg/util/byteutil"
 )
 
 const (
@@ -41,10 +41,12 @@ type (
 		ContractDeployHeight uint64 // height of the contract deployment
 		// TODO: move calculateVoteWeightFunc out of config
 		CalculateVoteWeight calculateVoteWeightFunc // calculate vote weight function
-		BlockInterval       time.Duration           // block produce interval
+		BlocksToDuration    blocksDurationAtFn      // function to calculate duration from block range
 	}
 
 	calculateVoteWeightFunc func(v *Bucket) *big.Int
+	blocksDurationFn        func(start uint64, end uint64) time.Duration
+	blocksDurationAtFn      func(start uint64, end uint64, viewAt uint64) time.Duration
 )
 
 // NewContractStakingIndexer creates a new contract staking indexer
@@ -90,6 +92,11 @@ func (s *Indexer) Height() (uint64, error) {
 // StartHeight returns the start height of the indexer
 func (s *Indexer) StartHeight() uint64 {
 	return s.config.ContractDeployHeight
+}
+
+// ContractAddress returns the contract address
+func (s *Indexer) ContractAddress() string {
+	return s.config.ContractAddress
 }
 
 // CandidateVotes returns the candidate votes
@@ -188,11 +195,6 @@ func (s *Indexer) PutBlock(ctx context.Context, blk *block.Block) error {
 
 	// commit the result
 	return s.commit(handler, blk.Height())
-}
-
-// DeleteTipBlock deletes the tip block from indexer
-func (s *Indexer) DeleteTipBlock(context.Context, *block.Block) error {
-	return errors.New("not implemented")
 }
 
 func (s *Indexer) commit(handler *contractStakingEventHandler, height uint64) error {

@@ -1,4 +1,4 @@
-// Copyright (c) 2019 IoTeX Foundation
+// Copyright (c) 2024 IoTeX Foundation
 // This source code is provided 'as is' and no warranties are given as to title or non-infringement, merchantability
 // or fitness for purpose and, to the extent permitted by law, all liability for your use of the code is disclaimed.
 // This source code is governed by Apache License 2.0 that can be found in the LICENSE file.
@@ -6,12 +6,22 @@
 package action
 
 import (
+	"context"
 	"math"
 	"math/big"
 
-	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/iotexproject/go-pkgs/crypto"
+	"github.com/iotexproject/iotex-address/address"
+	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 	"github.com/pkg/errors"
+)
+
+const (
+	LegacyTxType     = 0
+	AccessListTxType = 1
+	DynamicFeeTxType = 2
+	BlobTxType       = 3
 )
 
 type (
@@ -22,19 +32,32 @@ type (
 
 	// EthCompatibleAction is the action which is compatible to be converted to eth tx
 	EthCompatibleAction interface {
-		ToEthTx(uint32) (*types.Transaction, error)
+		EthTo() (*common.Address, error)
+		Value() *big.Int
+		EthData() ([]byte, error)
+	}
+
+	TxContainer interface {
+		Unfold(*SealedEnvelope, context.Context, func(context.Context, *common.Address) (bool, bool, bool, error)) error // unfold the tx inside the container
 	}
 
 	actionPayload interface {
-		Cost() (*big.Int, error)
 		IntrinsicGas() (uint64, error)
-		SetEnvelopeContext(Envelope)
 		SanityCheck() error
+		FillAction(*iotextypes.ActionCore)
 	}
 
-	hasDestination interface {
-		Destination() string
-	}
+	hasDestination interface{ Destination() string }
+
+	hasSize interface{ Size() uint32 }
+
+	amountForCost interface{ Amount() *big.Int }
+
+	gasLimitForCost interface{ GasLimitForCost() }
+
+	validateSidecar interface{ ValidateSidecar() error }
+
+	protoForRawHash interface{ ProtoForRawHash() *iotextypes.ActionCore }
 )
 
 // Sign signs the action using sender's private key
@@ -96,4 +119,16 @@ func IsSystemAction(act *SealedEnvelope) bool {
 	default:
 		return false
 	}
+}
+
+func CheckTransferAddress(act Action) error {
+	switch act := act.(type) {
+	case *Transfer:
+		if _, err := address.FromString(act.recipient); err != nil {
+			return errors.Wrapf(err, "invalid address %s", act.recipient)
+		}
+	default:
+		// other actions have this check in their SanityCheck
+	}
+	return nil
 }

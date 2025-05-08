@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libp2p/go-libp2p-core/peer"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
@@ -20,7 +20,7 @@ import (
 	"github.com/iotexproject/go-pkgs/hash"
 	"github.com/iotexproject/iotex-proto/golang/testingpb"
 
-	"github.com/iotexproject/iotex-core/testutil"
+	"github.com/iotexproject/iotex-core/v2/testutil"
 )
 
 func TestDummyAgent(t *testing.T) {
@@ -83,7 +83,9 @@ func TestBroadcast(t *testing.T) {
 			BootstrapNodes:    []string{bootnodeAddr[0].String()},
 			ReconnectInterval: 150 * time.Second,
 			MaxMessageSize:    p2p.DefaultConfig.MaxMessageSize,
-		}, 1, hash.ZeroHash256, b, u)
+		}, 1, hash.ZeroHash256, func(proto.Message) (bool, error) {
+			return false, nil
+		}, b, u)
 		agent.Start(ctx)
 		agents = append(agents, agent)
 	}
@@ -129,7 +131,7 @@ func TestUnicast(t *testing.T) {
 		} else {
 			counts[idx] = 1
 		}
-		src = peer.ID.Pretty()
+		src = peer.ID.String()
 	}
 
 	bootnode, err := p2p.NewHost(context.Background(), p2p.DHTProtocolID(2), p2p.Port(testutil.RandomPort()), p2p.SecureIO(), p2p.MasterKey("bootnode"))
@@ -142,7 +144,9 @@ func TestUnicast(t *testing.T) {
 			BootstrapNodes:    []string{addrs[0].String()},
 			ReconnectInterval: 150 * time.Second,
 			MasterKey:         strconv.Itoa(i),
-		}, 2, hash.ZeroHash256, b, u)
+		}, 2, hash.ZeroHash256, func(proto.Message) (bool, error) {
+			return false, nil
+		}, b, u)
 		r.NoError(agent.Start(ctx))
 		agents = append(agents, agent)
 	}
@@ -161,7 +165,7 @@ func TestUnicast(t *testing.T) {
 			defer mutex.RUnlock()
 			info, err := agents[i].Info()
 			r.NoError(err)
-			return counts[uint8(i)] == len(neighbors) && src == info.ID.Pretty(), nil
+			return counts[uint8(i)] == len(neighbors) && src == info.ID.String(), nil
 		}))
 	}
 }

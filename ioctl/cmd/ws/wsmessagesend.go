@@ -10,8 +10,8 @@ import (
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 
-	"github.com/iotexproject/iotex-core/ioctl/config"
-	"github.com/iotexproject/iotex-core/ioctl/output"
+	"github.com/iotexproject/iotex-core/v2/ioctl/config"
+	"github.com/iotexproject/iotex-core/v2/ioctl/output"
 )
 
 var (
@@ -51,10 +51,6 @@ var (
 		config.Chinese: "向w3bstream发送消息请求zk证明",
 	}
 
-	_flagProjectIDUsages = map[config.Language]string{
-		config.English: "project id",
-		config.Chinese: "项目ID",
-	}
 	_flagProjectVersionUsages = map[config.Language]string{
 		config.English: "project version",
 		config.Chinese: "项目版本",

@@ -9,22 +9,22 @@ import (
 	"context"
 
 	"github.com/facebookgo/clock"
+	"github.com/iotexproject/go-pkgs/hash"
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/poll"
-	rp "github.com/iotexproject/iotex-core/action/protocol/rolldpos"
-	"github.com/iotexproject/iotex-core/blockchain"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/consensus/scheme"
-	"github.com/iotexproject/iotex-core/consensus/scheme/rolldpos"
-	"github.com/iotexproject/iotex-core/pkg/lifecycle"
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/state"
-	"github.com/iotexproject/iotex-core/state/factory"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/poll"
+	rp "github.com/iotexproject/iotex-core/v2/action/protocol/rolldpos"
+	"github.com/iotexproject/iotex-core/v2/blockchain"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/consensus/scheme"
+	"github.com/iotexproject/iotex-core/v2/consensus/scheme/rolldpos"
+	"github.com/iotexproject/iotex-core/v2/pkg/lifecycle"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/state"
 )
 
 // Consensus is the interface for handling IotxConsensus view change.
@@ -49,6 +49,7 @@ type optionParams struct {
 	broadcastHandler scheme.Broadcast
 	pp               poll.Protocol
 	rp               *rp.Protocol
+	bbf              rolldpos.BlockBuilderFactory
 }
 
 // Option sets Consensus construction parameter.
@@ -78,11 +79,19 @@ func WithPollProtocol(pp poll.Protocol) Option {
 	}
 }
 
+// WithBlockBuilderFactory is an option to set block builder factory
+func WithBlockBuilderFactory(bbf rolldpos.BlockBuilderFactory) Option {
+	return func(ops *optionParams) error {
+		ops.bbf = bbf
+		return nil
+	}
+}
+
 // NewConsensus creates a IotxConsensus struct.
 func NewConsensus(
 	cfg rolldpos.BuilderConfig,
 	bc blockchain.Blockchain,
-	sf factory.Factory,
+	sf rolldpos.StateReaderFactory,
 	opts ...Option,
 ) (Consensus, error) {
 	var ops optionParams
@@ -100,7 +109,19 @@ func NewConsensus(
 	var err error
 	switch cfg.Scheme {
 	case RollDPoSScheme:
-		delegatesByEpochFunc := func(epochNum uint64) ([]string, error) {
+		if ops.bbf == nil {
+			return nil, errors.New("block builder factory is not set")
+		}
+		chainMgr := rolldpos.NewChainManager(bc, sf, ops.bbf)
+		delegatesByEpochFunc := func(epochNum uint64, prevHash []byte) ([]string, error) {
+			fork, err := chainMgr.Fork(hash.Hash256(prevHash))
+			if err != nil {
+				return nil, err
+			}
+			forkSF, err := fork.StateReader()
+			if err != nil {
+				return nil, err
+			}
 			re := protocol.NewRegistry()
 			if err := ops.rp.Register(re); err != nil {
 				return nil, err
@@ -110,15 +131,14 @@ func NewConsensus(
 				cfg.Genesis,
 			)
 			ctx = protocol.WithFeatureWithHeightCtx(ctx)
-			tipHeight := bc.TipHeight()
+			tipHeight := fork.TipHeight()
 			tipEpochNum := ops.rp.GetEpochNum(tipHeight)
 			var candidatesList state.CandidateList
-			var err error
 			switch epochNum {
 			case tipEpochNum:
-				candidatesList, err = ops.pp.Delegates(ctx, sf)
+				candidatesList, err = ops.pp.Delegates(ctx, forkSF)
 			case tipEpochNum + 1:
-				candidatesList, err = ops.pp.NextDelegates(ctx, sf)
+				candidatesList, err = ops.pp.NextDelegates(ctx, forkSF)
 			default:
 				err = errors.Errorf("invalid epoch number %d compared to tip epoch number %d", epochNum, tipEpochNum)
 			}
@@ -133,10 +153,9 @@ func NewConsensus(
 		}
 		proposersByEpochFunc := delegatesByEpochFunc
 		bd := rolldpos.NewRollDPoSBuilder().
-			SetAddr(cfg.Chain.ProducerAddress().String()).
-			SetPriKey(cfg.Chain.ProducerPrivateKey()).
+			SetPriKey(cfg.Chain.ProducerPrivateKeys()...).
 			SetConfig(cfg).
-			SetChainManager(rolldpos.NewChainManager(bc)).
+			SetChainManager(chainMgr).
 			SetBlockDeserializer(block.NewDeserializer(bc.EvmNetworkID())).
 			SetClock(clock).
 			SetBroadcast(ops.broadcastHandler).

@@ -18,9 +18,9 @@ import (
 	"github.com/iotexproject/iotex-proto/golang/iotexapi"
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 
-	"github.com/iotexproject/iotex-core/ioctl/config"
-	"github.com/iotexproject/iotex-core/ioctl/output"
-	"github.com/iotexproject/iotex-core/ioctl/util"
+	"github.com/iotexproject/iotex-core/v2/ioctl/config"
+	"github.com/iotexproject/iotex-core/v2/ioctl/output"
+	"github.com/iotexproject/iotex-core/v2/ioctl/util"
 )
 
 var (
@@ -188,7 +188,7 @@ func getBlock(args []string) error {
 	return nil
 }
 
-// getActionInfoByBlock gets action info by block hash with start index and action count
+// getActionInfoWithinBlock gets action info by block hash with start index and action count
 func getActionInfoWithinBlock(height uint64) ([]blocksInfo, error) {
 	conn, err := util.ConnectToEndpoint(config.ReadConfig.SecureConnect && !config.Insecure)
 	if err != nil {

@@ -16,14 +16,14 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
-	"github.com/golang/protobuf/ptypes/timestamp"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/iotexproject/iotex-core/ioctl/config"
-	"github.com/iotexproject/iotex-core/ioctl/util"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/test/mock/mock_ioctlclient"
+	"github.com/iotexproject/iotex-core/v2/ioctl/config"
+	"github.com/iotexproject/iotex-core/v2/ioctl/util"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/test/mock/mock_ioctlclient"
 )
 
 func TestNewAccountAction(t *testing.T) {
@@ -64,7 +64,7 @@ func TestNewAccountAction(t *testing.T) {
 			require.NoError(err)
 			resp, err := http.Post("https://url.com", "application/json", bytes.NewBuffer(jsonData))
 			require.NoError(err)
-			timestamp := strconv.Itoa(int(timestamp.Timestamp{Seconds: 10, Nanos: 10}.Seconds))
+			timestamp := strconv.Itoa(int(timestamppb.Timestamp{Seconds: 10, Nanos: 10}.Seconds))
 			sender := reqData.(map[string]string)["address"]
 			testData := `
 				{

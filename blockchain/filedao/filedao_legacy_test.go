@@ -15,10 +15,10 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/testutil"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/testutil"
 )
 
 func TestFileDAOLegacy_PutBlock(t *testing.T) {
@@ -74,8 +74,9 @@ func TestFileDAOLegacy_PutBlock(t *testing.T) {
 
 	cfg := db.DefaultConfig
 	cfg.DbPath = testPath
-	genesis.SetGenesisTimestamp(genesis.Default.Timestamp)
-	block.LoadGenesisHash(&genesis.Default)
+	g := genesis.TestDefault()
+	genesis.SetGenesisTimestamp(g.Timestamp)
+	block.LoadGenesisHash(&g)
 	for _, compress := range []bool{false, true} {
 		cfg.CompressLegacy = compress
 		t.Run("test fileDAOLegacy interface", func(t *testing.T) {

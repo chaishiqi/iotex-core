@@ -18,9 +18,9 @@ import (
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/tools/bot/config"
-	"github.com/iotexproject/iotex-core/tools/bot/pkg/util/grpcutil"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/tools/bot/config"
+	"github.com/iotexproject/iotex-core/v2/tools/bot/pkg/util/grpcutil"
 )
 
 // Transfer defines transfer struct
@@ -115,7 +115,12 @@ func (s *Transfer) transfer(pri crypto.PrivateKey) (txhash string, err error) {
 	if err != nil {
 		return
 	}
-	cli := iotex.NewAuthedClient(iotexapi.NewAPIServiceClient(conn), acc)
+	api := iotexapi.NewAPIServiceClient(conn)
+	response, err := api.GetChainMeta(context.Background(), &iotexapi.GetChainMetaRequest{})
+	if err != nil {
+		return
+	}
+	cli := iotex.NewAuthedClient(api, response.ChainMeta.ChainID, acc)
 
 	shash, err := cli.Transfer(addr, amount).SetNonce(nonce).SetGasLimit(s.cfg.GasLimit).SetGasPrice(gasprice).Call(context.Background())
 	if err != nil {

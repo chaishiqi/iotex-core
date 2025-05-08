@@ -37,13 +37,14 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/api/logfilter"
-	apitypes "github.com/iotexproject/iotex-core/api/types"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/pkg/recovery"
-	"github.com/iotexproject/iotex-core/pkg/tracer"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/api/logfilter"
+	apitypes "github.com/iotexproject/iotex-core/v2/api/types"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/blockdao/blockdaopb"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/pkg/recovery"
+	"github.com/iotexproject/iotex-core/v2/pkg/tracer"
 )
 
 type (
@@ -81,7 +82,7 @@ func RecoveryInterceptor() grpc_recovery.Option {
 }
 
 // NewGRPCServer creates a new grpc server
-func NewGRPCServer(core CoreService, grpcPort int) *GRPCServer {
+func NewGRPCServer(core CoreService, bds *blockDAOService, grpcPort int) *GRPCServer {
 	if grpcPort == 0 {
 		return nil
 	}
@@ -104,6 +105,10 @@ func NewGRPCServer(core CoreService, grpcPort int) *GRPCServer {
 	//serviceName: grpc.health.v1.Health
 	grpc_health_v1.RegisterHealthServer(gSvr, health.NewServer())
 	iotexapi.RegisterAPIServiceServer(gSvr, newGRPCHandler(core))
+	if bds != nil {
+		blockdaopb.RegisterBlockDAOServiceServer(gSvr, bds)
+	}
+	grpc_prometheus.EnableHandlingTimeHistogram()
 	grpc_prometheus.Register(gSvr)
 	reflection.Register(gSvr)
 	return &GRPCServer{
@@ -366,9 +371,8 @@ func (svr *gRPCHandler) ReadContract(ctx context.Context, in *iotexapi.ReadContr
 	if err := sc.LoadProto(in.GetExecution()); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	sc.SetGasLimit(in.GetGasLimit())
-
-	data, receipt, err := svr.coreService.ReadContract(ctx, callerAddr, sc)
+	elp := (&action.EnvelopeBuilder{}).SetAction(sc).SetGasLimit(in.GetGasLimit()).Build()
+	data, receipt, err := svr.coreService.ReadContract(ctx, callerAddr, elp)
 	if err != nil {
 		return nil, err
 	}
@@ -403,20 +407,25 @@ func (svr *gRPCHandler) EstimateActionGasConsumption(ctx context.Context, in *io
 		if err := sc.LoadProto(in.GetExecution()); err != nil {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
-		var (
-			gasPrice *big.Int = big.NewInt(0)
-			ok       bool
-		)
-		if in.GetGasPrice() != "" {
-			gasPrice, ok = big.NewInt(0).SetString(in.GetGasPrice(), 10)
-			if !ok {
-				return nil, status.Error(codes.InvalidArgument, "invalid gas price")
-			}
-		}
-		sc.SetGasPrice(gasPrice)
-		ret, err := svr.coreService.EstimateExecutionGasConsumption(ctx, sc, callerAddr)
+		elp := (&action.EnvelopeBuilder{}).SetAction(sc).Build()
+		ret, _, err := svr.coreService.EstimateExecutionGasConsumption(ctx, elp, callerAddr)
 		if err != nil {
 			return nil, err
+		}
+		return &iotexapi.EstimateActionGasConsumptionResponse{Gas: ret}, nil
+	}
+	if in.GetStakeMigrate() != nil {
+		callerAddr, err := address.FromString(in.GetCallerAddress())
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		ms := &action.MigrateStake{}
+		if err := ms.LoadProto(in.GetStakeMigrate()); err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		ret, _, err := svr.coreService.EstimateMigrateStakeGasConsumption(ctx, ms, callerAddr)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 		return &iotexapi.EstimateActionGasConsumptionResponse{Gas: ret}, nil
 	}
@@ -558,15 +567,17 @@ func (svr *gRPCHandler) StreamBlocks(_ *iotexapi.StreamBlocksRequest, stream iot
 	errChan := make(chan error)
 	defer close(errChan)
 	chainListener := svr.coreService.ChainListener()
-	if _, err := chainListener.AddResponder(NewGRPCBlockListener(
+	id, err := chainListener.AddResponder(NewGRPCBlockListener(
 		func(resp interface{}) (int, error) {
 			return 0, stream.Send(resp.(*iotexapi.StreamBlocksResponse))
 		},
 		errChan,
-	)); err != nil {
+	))
+	if err != nil {
 		return status.Error(codes.Internal, err.Error())
 	}
-	err := <-errChan
+	err = <-errChan
+	chainListener.RemoveResponder(id)
 	if err != nil {
 		return status.Error(codes.Aborted, err.Error())
 	}
@@ -581,16 +592,18 @@ func (svr *gRPCHandler) StreamLogs(in *iotexapi.StreamLogsRequest, stream iotexa
 	errChan := make(chan error)
 	defer close(errChan)
 	chainListener := svr.coreService.ChainListener()
-	if _, err := chainListener.AddResponder(NewGRPCLogListener(
+	id, err := chainListener.AddResponder(NewGRPCLogListener(
 		logfilter.NewLogFilter(in.GetFilter()),
 		func(in interface{}) (int, error) {
 			return 0, stream.Send(in.(*iotexapi.StreamLogsResponse))
 		},
 		errChan,
-	)); err != nil {
+	))
+	if err != nil {
 		return status.Error(codes.Internal, err.Error())
 	}
-	err := <-errChan
+	err = <-errChan
+	chainListener.RemoveResponder(id)
 	if err != nil {
 		return status.Error(codes.Aborted, err.Error())
 	}
@@ -752,7 +765,7 @@ func generateBlockMeta(blkStore *apitypes.BlockWithReceipts) *iotextypes.BlockMe
 func gasLimitAndUsed(acts []*action.SealedEnvelope, receipts []*action.Receipt) (uint64, uint64) {
 	var gasLimit, gasUsed uint64
 	for _, tx := range acts {
-		gasLimit += tx.GasLimit()
+		gasLimit += tx.Gas()
 	}
 	for _, r := range receipts {
 		gasUsed += r.GasConsumed

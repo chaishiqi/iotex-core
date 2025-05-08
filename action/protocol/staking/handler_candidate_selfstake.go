@@ -7,9 +7,9 @@ import (
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 	"github.com/pkg/errors"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/pkg/util/byteutil"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/pkg/util/byteutil"
 )
 
 const (
@@ -64,7 +64,7 @@ func (p *Protocol) handleCandidateActivate(ctx context.Context, act *action.Cand
 	}
 
 	if err := csm.Upsert(cand); err != nil {
-		return log, nil, csmErrorToHandleError(cand.Owner.String(), err)
+		return log, nil, csmErrorToHandleError(cand.GetIdentifier().String(), err)
 	}
 	return log, nil, nil
 }
@@ -81,11 +81,11 @@ func (p *Protocol) validateBucketSelfStake(ctx context.Context, csm CandidateSta
 	if err := validateBucketSelfStake(featureCtx, csm, bucket, false); err != nil {
 		return err
 	}
-	if err := validateBucketCandidate(bucket, cand.Owner); err != nil {
+	if err := validateBucketCandidate(bucket, cand.GetIdentifier()); err != nil {
 		return err
 	}
 	if validateBucketOwner(bucket, cand.Owner) != nil &&
-		validateBucketWithEndorsement(esm, bucket, blkCtx.BlockHeight) != nil {
+		validateBucketWithEndorsement(ctx, esm, bucket, blkCtx.BlockHeight) != nil {
 		return &handleError{
 			err:           errors.New("bucket is not a self-owned or endorsed bucket"),
 			failureStatus: iotextypes.ReceiptStatus_ErrUnauthorizedOperator,

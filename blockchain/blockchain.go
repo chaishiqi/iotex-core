@@ -1,4 +1,4 @@
-// Copyright (c) 2019 IoTeX Foundation
+// Copyright (c) 2024 IoTeX Foundation
 // This source code is provided 'as is' and no warranties are given as to title or non-infringement, merchantability
 // or fitness for purpose and, to the extent permitted by law, all liability for your use of the code is disclaimed.
 // This source code is governed by Apache License 2.0 that can be found in the LICENSE file.
@@ -7,27 +7,29 @@ package blockchain
 
 import (
 	"context"
+	"math/big"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/facebookgo/clock"
+	"github.com/iotexproject/go-pkgs/crypto"
 	"github.com/iotexproject/go-pkgs/hash"
 	"github.com/iotexproject/iotex-address/address"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/blockdao"
-	"github.com/iotexproject/iotex-core/blockchain/filedao"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/pkg/lifecycle"
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/pkg/prometheustimer"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/blockdao"
+	"github.com/iotexproject/iotex-core/v2/blockchain/filedao"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/pkg/lifecycle"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/pkg/prometheustimer"
+	"github.com/iotexproject/iotex-core/v2/pkg/unit"
 )
 
 // const
@@ -62,6 +64,12 @@ func init() {
 }
 
 type (
+	// MintOptions is the options to mint a new block
+	MintOptions struct {
+		ProducerPrivateKey crypto.PrivateKey
+	}
+	// MintOption sets the mint options
+	MintOption func(*MintOptions)
 	// Blockchain represents the blockchain data structure and hosts the APIs to access it
 	Blockchain interface {
 		lifecycle.StartStopper
@@ -85,15 +93,17 @@ type (
 		Genesis() genesis.Genesis
 		// Context returns current context
 		Context(context.Context) (context.Context, error)
+		// ContextAtHeight returns context at given height
+		ContextAtHeight(context.Context, uint64) (context.Context, error)
 
 		// For block operations
 		// MintNewBlock creates a new block with given actions
 		// Note: the coinbase transfer will be added to the given transfers when minting a new block
-		MintNewBlock(timestamp time.Time) (*block.Block, error)
+		MintNewBlock(time.Time, ...MintOption) (*block.Block, error)
 		// CommitBlock validates and appends a block to the chain
 		CommitBlock(blk *block.Block) error
 		// ValidateBlock validates a new block before adding it to the blockchain
-		ValidateBlock(blk *block.Block) error
+		ValidateBlock(*block.Block, ...BlockValidationOption) error
 
 		// AddSubscriber make you listen to every single produced block
 		AddSubscriber(BlockCreationSubscriber) error
@@ -102,10 +112,10 @@ type (
 		RemoveSubscriber(BlockCreationSubscriber) error
 	}
 
-	// BlockBuilderFactory is the factory interface of block builder
-	BlockBuilderFactory interface {
-		// NewBlockBuilder creates block builder
-		NewBlockBuilder(context.Context, func(action.Envelope) (*action.SealedEnvelope, error)) (*block.Builder, error)
+	// BlockMinter is the block minter interface
+	BlockMinter interface {
+		// Mint creates a new block
+		Mint(context.Context, crypto.PrivateKey) (*block.Block, error)
 	}
 
 	// blockchain implements the Blockchain interface
@@ -121,9 +131,16 @@ type (
 		timerFactory   *prometheustimer.TimerFactory
 
 		// used by account-based model
-		bbf BlockBuilderFactory
+		bbf BlockMinter
 	}
 )
+
+// WithProducerPrivateKey sets the producer private key
+func WithProducerPrivateKey(pk crypto.PrivateKey) MintOption {
+	return func(options *MintOptions) {
+		options.ProducerPrivateKey = pk
+	}
+}
 
 // Productivity returns the map of the number of blocks produced per delegate in given epoch
 func Productivity(bc Blockchain, startHeight uint64, endHeight uint64) (map[string]uint64, error) {
@@ -159,8 +176,22 @@ func ClockOption(clk clock.Clock) Option {
 	}
 }
 
+type (
+	BlockValidationCfg struct {
+		skipSidecarValidation bool
+	}
+
+	BlockValidationOption func(*BlockValidationCfg)
+)
+
+func SkipSidecarValidationOption() BlockValidationOption {
+	return func(opts *BlockValidationCfg) {
+		opts.skipSidecarValidation = true
+	}
+}
+
 // NewBlockchain creates a new blockchain and DB instance
-func NewBlockchain(cfg Config, g genesis.Genesis, dao blockdao.BlockDAO, bbf BlockBuilderFactory, opts ...Option) Blockchain {
+func NewBlockchain(cfg Config, g genesis.Genesis, dao blockdao.BlockDAO, bbf BlockMinter, opts ...Option) Blockchain {
 	// create the Blockchain
 	chain := &blockchain{
 		config:        cfg,
@@ -210,12 +241,17 @@ func (bc *blockchain) ChainAddress() string {
 func (bc *blockchain) Start(ctx context.Context) error {
 	bc.mu.Lock()
 	defer bc.mu.Unlock()
-
 	// pass registry to be used by state factory's initialization
-	ctx, err := bc.context(ctx, false)
-	if err != nil {
-		return err
-	}
+	ctx = protocol.WithFeatureWithHeightCtx(genesis.WithGenesisContext(
+		protocol.WithBlockchainCtx(
+			ctx,
+			protocol.BlockchainCtx{
+				ChainID:      bc.ChainID(),
+				EvmNetworkID: bc.EvmNetworkID(),
+				GetBlockHash: bc.dao.GetBlockHash,
+				GetBlockTime: bc.getBlockTime,
+			},
+		), bc.genesis))
 	return bc.lifecycle.OnStart(ctx)
 }
 
@@ -257,7 +293,7 @@ func (bc *blockchain) TipHeight() uint64 {
 }
 
 // ValidateBlock validates a new block before adding it to the blockchain
-func (bc *blockchain) ValidateBlock(blk *block.Block) error {
+func (bc *blockchain) ValidateBlock(blk *block.Block, opts ...BlockValidationOption) error {
 	bc.mu.RLock()
 	defer bc.mu.RUnlock()
 	timer := bc.timerFactory.NewTimer("ValidateBlock")
@@ -265,7 +301,11 @@ func (bc *blockchain) ValidateBlock(blk *block.Block) error {
 	if blk == nil {
 		return ErrInvalidBlock
 	}
-	tip, err := bc.tipInfo()
+	tipHeight, err := bc.dao.Height()
+	if err != nil {
+		return err
+	}
+	tip, err := bc.tipInfo(tipHeight)
 	if err != nil {
 		return err
 	}
@@ -289,7 +329,12 @@ func (bc *blockchain) ValidateBlock(blk *block.Block) error {
 			tip.Hash,
 		)
 	}
-
+	// verify EIP1559 header (baseFee adjustment)
+	if blk.Header.BaseFee() != nil {
+		if err = protocol.VerifyEIP1559Header(bc.genesis.Blockchain, tip, &blk.Header); err != nil {
+			return errors.Wrap(err, "failed to verify EIP1559 header (baseFee adjustment)")
+		}
+	}
 	if !blk.Header.VerifySignature() {
 		return errors.Errorf("failed to verify block's signature with public key: %x", blk.PublicKey())
 	}
@@ -301,34 +346,49 @@ func (bc *blockchain) ValidateBlock(blk *block.Block) error {
 	if producerAddr == nil {
 		return errors.New("failed to get address")
 	}
-	ctx, err := bc.context(context.Background(), true)
+	ctx, err := bc.context(context.Background(), tipHeight)
 	if err != nil {
 		return err
 	}
+	cfg := BlockValidationCfg{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	ctx = protocol.WithBlockCtx(ctx,
 		protocol.BlockCtx{
-			BlockHeight:    blk.Height(),
-			BlockTimeStamp: blk.Timestamp(),
-			GasLimit:       bc.genesis.BlockGasLimitByHeight(blk.Height()),
-			Producer:       producerAddr,
+			BlockHeight:           blk.Height(),
+			BlockTimeStamp:        blk.Timestamp(),
+			GasLimit:              bc.genesis.BlockGasLimitByHeight(blk.Height()),
+			Producer:              producerAddr,
+			BaseFee:               blk.BaseFee(),
+			ExcessBlobGas:         blk.ExcessBlobGas(),
+			SkipSidecarValidation: cfg.skipSidecarValidation,
 		},
 	)
 	ctx = protocol.WithFeatureCtx(ctx)
 	if bc.blockValidator == nil {
 		return nil
 	}
-
 	return bc.blockValidator.Validate(ctx, blk)
 }
 
 func (bc *blockchain) Context(ctx context.Context) (context.Context, error) {
 	bc.mu.RLock()
 	defer bc.mu.RUnlock()
-
-	return bc.context(ctx, true)
+	tipHeight, err := bc.dao.Height()
+	if err != nil {
+		return nil, err
+	}
+	return bc.context(ctx, tipHeight)
 }
 
-func (bc *blockchain) contextWithBlock(ctx context.Context, producer address.Address, height uint64, timestamp time.Time) context.Context {
+func (bc *blockchain) ContextAtHeight(ctx context.Context, height uint64) (context.Context, error) {
+	bc.mu.RLock()
+	defer bc.mu.RUnlock()
+	return bc.context(ctx, height)
+}
+
+func (bc *blockchain) contextWithBlock(ctx context.Context, producer address.Address, height uint64, timestamp time.Time, baseFee *big.Int, blobgas uint64) context.Context {
 	return protocol.WithBlockCtx(
 		ctx,
 		protocol.BlockCtx{
@@ -336,26 +396,25 @@ func (bc *blockchain) contextWithBlock(ctx context.Context, producer address.Add
 			BlockTimeStamp: timestamp,
 			Producer:       producer,
 			GasLimit:       bc.genesis.BlockGasLimitByHeight(height),
+			BaseFee:        baseFee,
+			ExcessBlobGas:  blobgas,
 		})
 }
 
-func (bc *blockchain) context(ctx context.Context, tipInfoFlag bool) (context.Context, error) {
-	var tip protocol.TipInfo
-	if tipInfoFlag {
-		if tipInfoValue, err := bc.tipInfo(); err == nil {
-			tip = *tipInfoValue
-		} else {
-			return nil, err
-		}
+func (bc *blockchain) context(ctx context.Context, height uint64) (context.Context, error) {
+	tip, err := bc.tipInfo(height)
+	if err != nil {
+		return nil, err
 	}
-
 	ctx = genesis.WithGenesisContext(
 		protocol.WithBlockchainCtx(
 			ctx,
 			protocol.BlockchainCtx{
-				Tip:          tip,
+				Tip:          *tip,
 				ChainID:      bc.ChainID(),
 				EvmNetworkID: bc.EvmNetworkID(),
+				GetBlockHash: bc.dao.GetBlockHash,
+				GetBlockTime: bc.getBlockTime,
 			},
 		),
 		bc.genesis,
@@ -363,39 +422,45 @@ func (bc *blockchain) context(ctx context.Context, tipInfoFlag bool) (context.Co
 	return protocol.WithFeatureWithHeightCtx(ctx), nil
 }
 
-func (bc *blockchain) MintNewBlock(timestamp time.Time) (*block.Block, error) {
+func (bc *blockchain) MintNewBlock(timestamp time.Time, opts ...MintOption) (*block.Block, error) {
 	bc.mu.RLock()
 	defer bc.mu.RUnlock()
 	mintNewBlockTimer := bc.timerFactory.NewTimer("MintNewBlock")
 	defer mintNewBlockTimer.End()
+	var options MintOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
 	tipHeight, err := bc.dao.Height()
 	if err != nil {
 		return nil, err
 	}
 	newblockHeight := tipHeight + 1
-	ctx, err := bc.context(context.Background(), true)
+	ctx, err := bc.context(context.Background(), tipHeight)
 	if err != nil {
 		return nil, err
 	}
-	ctx = bc.contextWithBlock(ctx, bc.config.ProducerAddress(), newblockHeight, timestamp)
+	tip := protocol.MustGetBlockchainCtx(ctx).Tip
+	producerPrivateKey := options.ProducerPrivateKey
+	if producerPrivateKey == nil {
+		privateKeys := bc.config.ProducerPrivateKeys()
+		if len(privateKeys) == 0 {
+			return nil, errors.New("no producer private key available")
+		}
+		producerPrivateKey = privateKeys[0]
+	}
+	minterAddress := producerPrivateKey.PublicKey().Address()
+	log.L().Info("Minting a new block.", zap.Uint64("height", newblockHeight), zap.String("minter", minterAddress.String()))
+	ctx = bc.contextWithBlock(ctx, minterAddress, newblockHeight, timestamp, protocol.CalcBaseFee(genesis.MustExtractGenesisContext(ctx).Blockchain, &tip), protocol.CalcExcessBlobGas(tip.ExcessBlobGas, tip.BlobGasUsed))
 	ctx = protocol.WithFeatureCtx(ctx)
 	// run execution and update state trie root hash
-	minterPrivateKey := bc.config.ProducerPrivateKey()
-	blockBuilder, err := bc.bbf.NewBlockBuilder(
-		ctx,
-		func(elp action.Envelope) (*action.SealedEnvelope, error) {
-			return action.Sign(elp, minterPrivateKey)
-		},
-	)
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to create block builder at new block height %d", newblockHeight)
-	}
-	blk, err := blockBuilder.SignAndBuild(minterPrivateKey)
+	blk, err := bc.bbf.Mint(ctx, producerPrivateKey)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to create block")
 	}
-
-	return &blk, nil
+	_blockMtc.WithLabelValues("MintGas").Set(float64(blk.GasUsed()))
+	_blockMtc.WithLabelValues("MintActions").Set(float64(len(blk.Actions)))
+	return blk, nil
 }
 
 // CommitBlock validates and appends a block to the chain
@@ -432,11 +497,7 @@ func (bc *blockchain) Genesis() genesis.Genesis {
 // private functions
 //=====================================
 
-func (bc *blockchain) tipInfo() (*protocol.TipInfo, error) {
-	tipHeight, err := bc.dao.Height()
-	if err != nil {
-		return nil, err
-	}
+func (bc *blockchain) tipInfo(tipHeight uint64) (*protocol.TipInfo, error) {
 	if tipHeight == 0 {
 		return &protocol.TipInfo{
 			Height:    0,
@@ -450,27 +511,38 @@ func (bc *blockchain) tipInfo() (*protocol.TipInfo, error) {
 	}
 
 	return &protocol.TipInfo{
-		Height:    tipHeight,
-		Hash:      header.HashBlock(),
-		Timestamp: header.Timestamp(),
+		Height:        tipHeight,
+		GasUsed:       header.GasUsed(),
+		Hash:          header.HashBlock(),
+		Timestamp:     header.Timestamp(),
+		BaseFee:       header.BaseFee(),
+		BlobGasUsed:   header.BlobGasUsed(),
+		ExcessBlobGas: header.ExcessBlobGas(),
 	}, nil
 }
 
 // commitBlock commits a block to the chain
 func (bc *blockchain) commitBlock(blk *block.Block) error {
-	ctx, err := bc.context(context.Background(), true)
+	tipHeight, err := bc.dao.Height()
 	if err != nil {
 		return err
 	}
-
+	ctx, err := bc.context(context.Background(), tipHeight)
+	if err != nil {
+		return err
+	}
+	ctx = bc.contextWithBlock(ctx, blk.PublicKey().Address(), blk.Height(), blk.Timestamp(), blk.BaseFee(), blk.ExcessBlobGas())
+	ctx = protocol.WithFeatureCtx(ctx)
 	// write block into DB
 	putTimer := bc.timerFactory.NewTimer("putBlock")
 	err = bc.dao.PutBlock(ctx, blk)
 	putTimer.End()
-	switch {
-	case errors.Cause(err) == filedao.ErrAlreadyExist:
+	switch errors.Cause(err) {
+	case filedao.ErrAlreadyExist, blockdao.ErrAlreadyExist:
 		return nil
-	case err != nil:
+	case nil:
+		// do nothing
+	default:
 		return err
 	}
 	blkHash := blk.HashBlock()
@@ -478,6 +550,12 @@ func (bc *blockchain) commitBlock(blk *block.Block) error {
 		blk.HeaderLogger(log.L()).Info("Committed a block.", log.Hex("tipHash", blkHash[:]))
 	}
 	_blockMtc.WithLabelValues("numActions").Set(float64(len(blk.Actions)))
+	if blk.BaseFee() != nil {
+		basefeeQev := new(big.Int).Div(blk.BaseFee(), big.NewInt(unit.Qev))
+		_blockMtc.WithLabelValues("baseFee").Set(float64(basefeeQev.Int64()))
+	}
+	_blockMtc.WithLabelValues("excessBlobGas").Set(float64(blk.ExcessBlobGas()))
+	_blockMtc.WithLabelValues("blobGasUsed").Set(float64(blk.BlobGasUsed()))
 	// emit block to all block subscribers
 	bc.emitToSubscribers(blk)
 	return nil
@@ -488,4 +566,15 @@ func (bc *blockchain) emitToSubscribers(blk *block.Block) {
 		return
 	}
 	bc.pubSubManager.SendBlockToSubscribers(blk)
+}
+
+func (bc *blockchain) getBlockTime(height uint64) (time.Time, error) {
+	if height == 0 {
+		return time.Unix(bc.genesis.Timestamp, 0), nil
+	}
+	header, err := bc.dao.HeaderByHeight(height)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return header.Timestamp(), nil
 }

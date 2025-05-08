@@ -32,6 +32,7 @@ BUILD_TARGET_ARCH=$(shell go env GOARCH)
 ALL_PKGS := $(shell go list ./... )
 PKGS := $(shell go list ./... | grep -v /test/ )
 ROOT_PKG := "github.com/iotexproject/iotex-core"
+TEST_PKGS := $(shell go list ./... | grep -E -v 'pb$|testdata|mock')
 
 # Docker parameters
 DOCKERCMD=docker
@@ -53,7 +54,7 @@ endif
 endif
 GO_VERSION := $(shell go version)
 BUILD_TIME=$(shell date +%F-%Z/%T)
-VersionImportPath := github.com/iotexproject/iotex-core/pkg/version
+VersionImportPath := github.com/iotexproject/iotex-core/v2/pkg/version
 PackageFlags += -X '$(VersionImportPath).PackageVersion=$(PACKAGE_VERSION)'
 PackageFlags += -X '$(VersionImportPath).PackageCommitID=$(PACKAGE_COMMIT_ID)'
 PackageFlags += -X '$(VersionImportPath).GitStatus=$(GIT_STATUS)'
@@ -123,7 +124,7 @@ lint-rich:
 
 .PHONY: test
 test: fmt
-	$(GOTEST) -gcflags="all=-N -l" -short -race ./...
+	@$(GOTEST) -gcflags="all=-N -l" -short -race ${TEST_PKGS}
 
 .PHONY: test-rich
 test-rich:
@@ -215,6 +216,10 @@ minicluster:
 	$(ECHO_V)rm -rf *trie*.db
 	$(ECHO_V)rm -rf *index*.db
 	$(ECHO_V)rm -rf *candidate.index*.db
+	$(ECHO_V)rm -rf *blob*.db
+	$(ECHO_V)rm -rf *bloomfilter.index*.db
+	$(ECHO_V)rm -rf *consensus*.db
+	$(ECHO_V)rm -rf *contractstaking.index*.db
 	$(GOBUILD) -ldflags "$(PackageFlags)" -o ./bin/$(BUILD_TARGET_MINICLUSTER) -v ./tools/minicluster
 	./bin/$(BUILD_TARGET_MINICLUSTER)
 

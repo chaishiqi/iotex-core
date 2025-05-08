@@ -10,15 +10,16 @@ import (
 
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/db/batch"
-	"github.com/iotexproject/iotex-core/pkg/compress"
-	"github.com/iotexproject/iotex-core/pkg/util/byteutil"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/db/batch"
+	"github.com/iotexproject/iotex-core/v2/pkg/compress"
+	"github.com/iotexproject/iotex-core/v2/pkg/util/byteutil"
 )
 
 func (fd *fileDAOv2) populateStagingBuffer() (*stagingBuffer, error) {
-	buffer := newStagingBuffer(fd.header.BlockStoreSize, fd.deser)
+	buffer := newStagingBuffer(fd.header.BlockStoreSize, fd.header.Start)
 	blockStoreTip := fd.highestBlockOfStoreTip()
 	for i := uint64(0); i < fd.header.BlockStoreSize; i++ {
 		v, err := fd.kvStore.Get(_headerDataNs, byteutil.Uint64ToBytesBigEndian(i))
@@ -41,7 +42,7 @@ func (fd *fileDAOv2) populateStagingBuffer() (*stagingBuffer, error) {
 		// populate to staging buffer, if the block is in latest round
 		height := info.Block.Height()
 		if height > blockStoreTip {
-			if _, err = buffer.Put(stagingKey(height, fd.header), v); err != nil {
+			if _, err = buffer.Put(height, info); err != nil {
 				return nil, err
 			}
 		} else {
@@ -86,12 +87,12 @@ func (fd *fileDAOv2) putBlock(blk *block.Block) error {
 	}
 
 	// add to staging buffer
-	index := stagingKey(blk.Height(), fd.header)
-	full, err := fd.blkBuffer.Put(index, ser)
+	full, err := fd.blkBuffer.Put(blk.Height(), blkInfo)
 	if err != nil {
 		return err
 	}
 	if !full {
+		index := fd.blkBuffer.slot(blk.Height())
 		fd.batch.Put(_headerDataNs, byteutil.Uint64ToBytesBigEndian(index), blkBytes, "failed to put block")
 		return nil
 	}
@@ -150,11 +151,6 @@ func blockStoreKey(height uint64, header *FileHeader) uint64 {
 	return (height - header.Start) / header.BlockStoreSize
 }
 
-// stagingKey is the position of block in the staging buffer
-func stagingKey(height uint64, header *FileHeader) uint64 {
-	return (height - header.Start) % header.BlockStoreSize
-}
-
 // lowestBlockOfStoreTip is the lowest height of the tip of block storage
 // used in DeleteTipBlock(), once new tip height drops below this, the tip of block storage can be deleted
 func (fd *fileDAOv2) lowestBlockOfStoreTip() uint64 {
@@ -172,23 +168,57 @@ func (fd *fileDAOv2) highestBlockOfStoreTip() uint64 {
 	return fd.header.Start + fd.blkStore.Size()*fd.header.BlockStoreSize - 1
 }
 
-func (fd *fileDAOv2) getBlockStore(height uint64) (*block.Store, error) {
+func (fd *fileDAOv2) getBlock(height uint64) (*block.Block, error) {
 	if !fd.ContainsHeight(height) {
 		return nil, db.ErrNotExist
 	}
-
 	// check whether block in staging buffer or not
+	if blkStore := fd.getFromStagingBuffer(height); blkStore != nil {
+		return blkStore.Block, nil
+	}
+	// read from storage DB
+	blockStore, err := fd.getBlockStore(height)
+	if err != nil {
+		return nil, err
+	}
+	return fd.deser.BlockFromBlockStoreProto(blockStore)
+}
+
+func (fd *fileDAOv2) getReceipt(height uint64) ([]*action.Receipt, error) {
+	if !fd.ContainsHeight(height) {
+		return nil, db.ErrNotExist
+	}
+	// check whether block in staging buffer or not
+	if blkStore := fd.getFromStagingBuffer(height); blkStore != nil {
+		return blkStore.Receipts, nil
+	}
+	// read from storage DB
+	blockStore, err := fd.getBlockStore(height)
+	if err != nil {
+		return nil, err
+	}
+	return fd.deser.ReceiptsFromBlockStoreProto(blockStore)
+}
+
+func (fd *fileDAOv2) getFromStagingBuffer(height uint64) *block.Store {
+	if fd.loadTip().Height-height >= fd.header.BlockStoreSize {
+		return nil
+	}
+	blkStore := fd.blkBuffer.Get(height)
+	if blkStore == nil || blkStore.Block.Height() != height {
+		return nil
+	}
+	return blkStore
+}
+
+func (fd *fileDAOv2) getBlockStore(height uint64) (*iotextypes.BlockStore, error) {
+	// check whether blockStore in read cache or not
 	storeKey := blockStoreKey(height, fd.header)
-	if storeKey >= fd.blkStore.Size() {
-		return fd.blkBuffer.Get(stagingKey(height, fd.header))
-	}
-
-	// check whether block in read cache or not
-	if value, ok := fd.blkCache.Get(storeKey); ok {
+	if value, ok := fd.blkStorePbCache.Get(storeKey); ok {
 		pbInfos := value.(*iotextypes.BlockStores)
-		return fd.deser.FromBlockStoreProto(pbInfos.BlockStores[stagingKey(height, fd.header)])
+		return pbInfos.BlockStores[fd.blkBuffer.slot(height)], nil
 	}
-
+	// read from storage DB
 	value, err := fd.blkStore.Get(storeKey)
 	if err != nil {
 		return nil, err
@@ -204,8 +234,7 @@ func (fd *fileDAOv2) getBlockStore(height uint64) (*block.Store, error) {
 	if len(pbStores.BlockStores) != int(fd.header.BlockStoreSize) {
 		return nil, ErrDataCorruption
 	}
-
 	// add to read cache
-	fd.blkCache.Add(storeKey, pbStores)
-	return fd.deser.FromBlockStoreProto(pbStores.BlockStores[stagingKey(height, fd.header)])
+	fd.blkStorePbCache.Add(storeKey, pbStores)
+	return pbStores.BlockStores[fd.blkBuffer.slot(height)], nil
 }

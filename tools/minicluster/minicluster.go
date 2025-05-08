@@ -15,6 +15,7 @@ import (
 	"math/big"
 	"math/rand"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,26 +26,28 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/rewarding"
-	"github.com/iotexproject/iotex-core/blockchain"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/config"
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/pkg/probe"
-	"github.com/iotexproject/iotex-core/pkg/unit"
-	"github.com/iotexproject/iotex-core/pkg/util/fileutil"
-	"github.com/iotexproject/iotex-core/server/itx"
-	"github.com/iotexproject/iotex-core/state/factory"
-	"github.com/iotexproject/iotex-core/testutil"
-	"github.com/iotexproject/iotex-core/tools/executiontester/assetcontract"
-	bc "github.com/iotexproject/iotex-core/tools/executiontester/blockchain"
-	"github.com/iotexproject/iotex-core/tools/util"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rewarding"
+	"github.com/iotexproject/iotex-core/v2/blockchain"
+	"github.com/iotexproject/iotex-core/v2/blockchain/blockdao"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/config"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/pkg/probe"
+	"github.com/iotexproject/iotex-core/v2/pkg/unit"
+	"github.com/iotexproject/iotex-core/v2/pkg/util/fileutil"
+	"github.com/iotexproject/iotex-core/v2/server/itx"
+	"github.com/iotexproject/iotex-core/v2/state/factory"
+	"github.com/iotexproject/iotex-core/v2/testutil"
+	"github.com/iotexproject/iotex-core/v2/tools/executiontester/assetcontract"
+	bc "github.com/iotexproject/iotex-core/v2/tools/executiontester/blockchain"
+	"github.com/iotexproject/iotex-core/v2/tools/util"
 )
 
 const (
-	_numNodes  = 4
-	_numAdmins = 2
+	_numNodes     = 2
+	_numDelegates = _numNodes * 2
+	_numAdmins    = 2
 )
 
 func main() {
@@ -75,6 +78,9 @@ func main() {
 	if err != nil {
 		log.L().Fatal("Failed to load addresses from config path", zap.Error(err))
 	}
+	for _, addr := range chainAddrs {
+		log.L().Info("Address", zap.String("address", addr.PriKey.PublicKey().Address().String()))
+	}
 	admins := chainAddrs[len(chainAddrs)-_numAdmins:]
 	delegates := chainAddrs[:len(chainAddrs)-_numAdmins]
 
@@ -91,6 +97,10 @@ func main() {
 		dbFilePaths = append(dbFilePaths, trieDBPath)
 		indexDBPath := fmt.Sprintf("./index%d.db", i+1)
 		dbFilePaths = append(dbFilePaths, indexDBPath)
+		blobDBPath := fmt.Sprintf("./blob%d.db", i+1)
+		dbFilePaths = append(dbFilePaths, blobDBPath)
+		contractStakingIndexDBPath := fmt.Sprintf("./contractstaking.index%d.db", i+1)
+		dbFilePaths = append(dbFilePaths, contractStakingIndexDBPath)
 		bloomfilterIndexDBPath := fmt.Sprintf("./bloomfilter.index%d.db", i+1)
 		dbFilePaths = append(dbFilePaths, bloomfilterIndexDBPath)
 		consensusDBPath := fmt.Sprintf("./consensus%d.db", i+1)
@@ -98,27 +108,36 @@ func main() {
 		systemLogDBPath := fmt.Sprintf("./systemlog%d.db", i+1)
 		dbFilePaths = append(dbFilePaths, systemLogDBPath)
 		candidateIndexDBPath := fmt.Sprintf("./candidate.index%d.db", i+1)
+		actpoolCacheDBPath := fmt.Sprintf("./actpool%d.cache", i+1)
 		dbFilePaths = append(dbFilePaths, candidateIndexDBPath)
+		dbFilePaths = append(dbFilePaths, contractStakingIndexDBPath)
+		dbFilePaths = append(dbFilePaths, blobDBPath)
+		dbFilePaths = append(dbFilePaths, actpoolCacheDBPath)
 		networkPort := config.Default.Network.Port + i
 		apiPort := config.Default.API.GRPCPort + i
 		web3APIPort := config.Default.API.HTTPPort + i
 		web3SocketPort := config.Default.API.WebSocketPort + i
 		HTTPAdminPort := config.Default.System.HTTPAdminPort + i
-		config := newConfig(chainAddrs[i].PriKey, networkPort, apiPort, web3APIPort, web3SocketPort, HTTPAdminPort)
+		config := newConfig([]crypto.PrivateKey{chainAddrs[i].PriKey, chainAddrs[i+_numNodes].PriKey}, networkPort, apiPort, web3APIPort, web3SocketPort, HTTPAdminPort)
 		config.Chain.ChainDBPath = chainDBPath
 		config.Chain.TrieDBPatchFile = ""
 		config.Chain.TrieDBPath = trieDBPath
 		config.Chain.IndexDBPath = indexDBPath
+		config.Chain.BlobStoreDBPath = blobDBPath
+		config.Chain.ContractStakingIndexDBPath = contractStakingIndexDBPath
 		config.Chain.BloomfilterIndexDBPath = bloomfilterIndexDBPath
 		config.Chain.CandidateIndexDBPath = candidateIndexDBPath
 		config.Consensus.RollDPoS.ConsensusDBPath = consensusDBPath
 		config.System.SystemLogDBPath = systemLogDBPath
+		config.Chain.ContractStakingIndexDBPath = contractStakingIndexDBPath
+		config.Chain.BlobStoreDBPath = blobDBPath
+		config.ActPool.Store.Datadir = actpoolCacheDBPath
 		if i == 0 {
 			config.Network.BootstrapNodes = []string{}
 			config.Network.MasterKey = "bootnode"
 		}
-		config.Genesis.AleutianBlockHeight = 1
-		config.Genesis.PacificBlockHeight = 1
+		config.Genesis.VanuatuBlockHeight = 1
+		testutil.NormalizeGenesisHeights(&config.Genesis.Blockchain)
 		configs[i] = config
 	}
 
@@ -209,7 +228,7 @@ func main() {
 			receipt *iotextypes.Receipt
 			as      = svrs[0].APIServer(1)
 		)
-		if err := testutil.WaitUntil(100*time.Millisecond, 60*time.Second, func() (bool, error) {
+		if err := testutil.WaitUntil(100*time.Millisecond, 120*time.Second, func() (bool, error) {
 			receipt, err = util.GetReceiptByAction(as.CoreService(), eHash)
 			return receipt != nil, nil
 		}); err != nil {
@@ -269,6 +288,7 @@ func main() {
 
 		expectedBalancesMap := util.GetAllBalanceMap(client, chainAddrs)
 		pendingActionMap, _ := ttl.NewCache(ttl.EvictOnErrorOption())
+		expectedUnclaimedMap := make(map[string]*big.Int)
 
 		log.L().Info("Start action injections.")
 
@@ -276,7 +296,7 @@ func main() {
 		util.InjectByAps(wg, aps, counter, transferGasLimit, transferGasPrice, transferPayload, voteGasLimit,
 			voteGasPrice, contract, executionAmount, executionGasLimit, executionGasPrice, interactExecData, fpToken,
 			fpContract, debtor, creditor, client, admins, delegates, d, retryNum, retryInterval, resetInterval,
-			expectedBalancesMap, as.CoreService(), pendingActionMap)
+			expectedBalancesMap, as.CoreService(), pendingActionMap, expectedUnclaimedMap)
 		wg.Wait()
 
 		err = testutil.WaitUntil(100*time.Millisecond, 60*time.Second, func() (bool, error) {
@@ -284,6 +304,7 @@ func main() {
 				as.CoreService(),
 				pendingActionMap,
 				expectedBalancesMap,
+				expectedUnclaimedMap,
 			)
 			if err != nil {
 				log.L().Error(err.Error())
@@ -299,11 +320,12 @@ func main() {
 		})
 
 		if err != nil {
-			log.L().Error("Not all actions are settled")
+			log.L().Error("Not all actions are settled", zap.Error(err), zap.Int("totalPendingActions", totalPendingActions))
 		}
 
 		chains := make([]blockchain.Blockchain, _numNodes)
 		sfs := make([]factory.Factory, _numNodes)
+		daos := make([]blockdao.BlockDAO, _numNodes)
 		stateHeights := make([]uint64, _numNodes)
 		bcHeights := make([]uint64, _numNodes)
 		idealHeight := make([]uint64, _numNodes)
@@ -314,6 +336,7 @@ func main() {
 		for i := 0; i < _numNodes; i++ {
 			chains[i] = svrs[i].ChainService(configs[i].Chain.ID).Blockchain()
 			sfs[i] = svrs[i].ChainService(configs[i].Chain.ID).StateFactory()
+			daos[i] = svrs[i].ChainService(configs[i].Chain.ID).BlockDAO()
 
 			stateHeights[i], err = sfs[i].Height()
 			if err != nil {
@@ -325,7 +348,7 @@ func main() {
 			if timeout > minTimeout {
 				netTimeout = timeout - minTimeout
 			}
-			idealHeight[i] = uint64((time.Duration(netTimeout) * time.Second) / configs[i].Genesis.BlockInterval)
+			idealHeight[i] = uint64((time.Duration(netTimeout) * time.Second) / configs[i].DardanellesUpgrade.BlockInterval)
 
 			log.S().Infof("Node#%d blockchain height: %d", i, bcHeights[i])
 			log.S().Infof("Node#%d state      height: %d", i, stateHeights[i])
@@ -393,6 +416,19 @@ func main() {
 			log.S().Info("Fp token transfer test pass!")
 		}
 
+		for h := uint64(1); h <= bcHeights[0]; h++ {
+			header, err := chains[0].BlockHeaderByHeight(h)
+			if err != nil {
+				log.S().Fatal("Failed to get block header.", zap.Error(err))
+			}
+			ub, ok := expectedUnclaimedMap[header.ProducerAddress()]
+			if !ok {
+				ub = big.NewInt(0)
+				expectedUnclaimedMap[header.ProducerAddress()] = ub
+			}
+			ub.Add(ub, configs[0].Genesis.BlockReward())
+		}
+
 		registries := make([]*protocol.Registry, _numNodes)
 		for i := 0; i < _numNodes; i++ {
 			registries[i] = svrs[i].ChainService(configs[i].Chain.ID).Registry()
@@ -419,6 +455,18 @@ func main() {
 				log.S().Fatal("actual block reward is incorrect.")
 			}
 
+			proposer := configs[i].Chain.ProducerAddress()[0]
+			balance, _, err := rp.UnclaimedBalance(ctx, sfs[i], proposer)
+			if err != nil {
+				log.S().Fatal("Failed to get unclaimed balance.", zap.Error(err))
+			}
+			expect := expectedUnclaimedMap[proposer.String()]
+			if expect == nil {
+				expect = big.NewInt(0)
+			}
+			if balance.Cmp(expect) != 0 {
+				log.S().Errorf("actual unclaimed balance is incorrect. Proposer: %s, Expected: %s, Actual: %s", proposer.String(), expectedUnclaimedMap[proposer.String()].String(), balance.String())
+			}
 			epochReward, err := rp.EpochReward(ctx, sfs[i])
 			if err != nil {
 				log.S().Fatal("Failed to get epoch reward.", zap.Error(err))
@@ -433,7 +481,7 @@ func main() {
 }
 
 func newConfig(
-	producerPriKey crypto.PrivateKey,
+	producerPriKeys []crypto.PrivateKey,
 	networkPort,
 	apiPort int,
 	web3APIPort int,
@@ -441,6 +489,7 @@ func newConfig(
 	HTTPAdminPort int,
 ) config.Config {
 	cfg := config.Default
+	cfg.Genesis = genesis.TestDefault()
 
 	cfg.Plugins[config.GatewayPlugin] = true
 	cfg.Chain.EnableAsyncIndexWrite = false
@@ -450,7 +499,11 @@ func newConfig(
 	cfg.Network.BootstrapNodes = []string{"/ip4/127.0.0.1/tcp/4689/ipfs/12D3KooWJwW6pUpTkxPTMv84RPLPMQVEAjZ6fvJuX4oZrvW5DAGQ"}
 
 	cfg.Chain.ID = 1
-	cfg.Chain.ProducerPrivKey = producerPriKey.HexString()
+	keys := make([]string, 0, len(producerPriKeys))
+	for _, key := range producerPriKeys {
+		keys = append(keys, key.HexString())
+	}
+	cfg.Chain.ProducerPrivKey = strings.Join(keys, ",")
 
 	cfg.ActPool.MinGasPriceStr = big.NewInt(0).String()
 
@@ -470,9 +523,9 @@ func newConfig(
 
 	cfg.Genesis.BlockInterval = 6 * time.Second
 	cfg.Genesis.Blockchain.NumSubEpochs = 2
-	cfg.Genesis.Blockchain.NumDelegates = _numNodes
+	cfg.Genesis.Blockchain.NumDelegates = _numDelegates
 	cfg.Genesis.Blockchain.TimeBasedRotation = true
-	cfg.Genesis.Delegates = cfg.Genesis.Delegates[3 : _numNodes+3]
+	cfg.Genesis.Delegates = cfg.Genesis.Delegates[3 : _numDelegates+3]
 	cfg.Genesis.EnableGravityChainVoting = false
 	cfg.Genesis.PollMode = "lifeLong"
 

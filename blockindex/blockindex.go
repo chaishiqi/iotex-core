@@ -11,8 +11,8 @@ import (
 	"github.com/pkg/errors"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/iotexproject/iotex-core/blockindex/indexpb"
-	"github.com/iotexproject/iotex-core/pkg/util/byteutil"
+	"github.com/iotexproject/iotex-core/v2/blockindex/indexpb"
+	"github.com/iotexproject/iotex-core/v2/pkg/util/byteutil"
 )
 
 // BlockIndex change private to public for mock Indexer
@@ -42,7 +42,7 @@ func (b *BlockIndex) Serialize() []byte {
 	return byteutil.Must(proto.Marshal(b.toProto()))
 }
 
-// Desrialize from byte stream
+// Deserialize from byte stream
 func (b *BlockIndex) Deserialize(buf []byte) error {
 	pb := &indexpb.BlockIndex{}
 	if err := proto.Unmarshal(buf, pb); err != nil {

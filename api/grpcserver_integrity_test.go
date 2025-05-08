@@ -29,20 +29,20 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/poll"
-	"github.com/iotexproject/iotex-core/actpool"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/consensus"
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/pkg/unit"
-	"github.com/iotexproject/iotex-core/pkg/version"
-	"github.com/iotexproject/iotex-core/state"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/test/mock/mock_blockchain"
-	"github.com/iotexproject/iotex-core/testutil"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/poll"
+	"github.com/iotexproject/iotex-core/v2/actpool"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/consensus"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/pkg/unit"
+	"github.com/iotexproject/iotex-core/v2/pkg/version"
+	"github.com/iotexproject/iotex-core/v2/state"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/test/mock/mock_blockchain"
+	"github.com/iotexproject/iotex-core/v2/testutil"
 )
 
 const lld = "lifeLongDelegates"
@@ -447,7 +447,7 @@ var (
 		{
 			hex.EncodeToString(_executionHash1[:]),
 			"",
-			"08b0066e10b5607e47159c2cf7ba36e36d0c980f5108dfca0ec20547a7adace4",
+			"23895376e424873b43603a4f43d92054fe99fa9f51dab1eada24b2ce808c5997",
 			"",
 			10100,
 		},
@@ -1238,7 +1238,6 @@ func TestGrpcServer_GetChainMetaIntegrity(t *testing.T) {
 				nil,
 				cfg.genesis.NumCandidateDelegates,
 				cfg.genesis.NumDelegates,
-				cfg.genesis.DardanellesNumSubEpochs,
 				cfg.genesis.ProductivityThreshold,
 				cfg.genesis.ProbationEpochPeriod,
 				cfg.genesis.UnproductiveDelegateMaxCacheSize,
@@ -1292,7 +1291,7 @@ func TestGrpcServer_SendActionIntegrity(t *testing.T) {
 	cfg := newConfig()
 	cfg.api.GRPCPort = testutil.RandomPort()
 	cfg.genesis.MidwayBlockHeight = 10
-	svr, _, _, _, _, _, bfIndexFile, err := createServerV2(cfg, true)
+	svr, _, _, _, _, ap, bfIndexFile, err := createServerV2(cfg, true)
 	require.NoError(err)
 	grpcHandler := newGRPCHandler(svr.core)
 	defer func() {
@@ -1306,7 +1305,8 @@ func TestGrpcServer_SendActionIntegrity(t *testing.T) {
 		broadcastHandlerCount++
 		return nil
 	}
-	coreService.messageBatcher = nil
+	coreService.actionRadio = NewActionRadio(coreService.broadcastHandler, 0)
+	ap.AddSubscriber(coreService.actionRadio)
 
 	for i, test := range _sendActionTests {
 		request := &iotexapi.SendActionRequest{Action: test.actionPb}
@@ -1477,14 +1477,14 @@ func TestGrpcServer_ReadContractIntegrity(t *testing.T) {
 		request := &iotexapi.ReadContractRequest{
 			Execution:     exec.Proto().GetCore().GetExecution(),
 			CallerAddress: test.callerAddr,
-			GasLimit:      exec.GasLimit(),
+			GasLimit:      exec.Gas(),
 			GasPrice:      big.NewInt(unit.Qev).String(),
 		}
 
 		res, err := grpcHandler.ReadContract(context.Background(), request)
 		require.NoError(err)
 		require.Equal(test.retValue, res.Data)
-		require.EqualValues(1, res.Receipt.Status)
+		require.EqualValues(0, res.Receipt.Status)
 		require.Equal(test.actionHash, hex.EncodeToString(res.Receipt.ActHash))
 		require.Equal(test.gasConsumed, res.Receipt.GasConsumed)
 	}
@@ -1551,8 +1551,7 @@ func TestGrpcServer_EstimateActionGasConsumptionIntegrity(t *testing.T) {
 	data := "608060405234801561001057600080fd5b50610123600102600281600019169055503373ffffffffffffffffffffffffffffffffffffffff166001026003816000191690555060035460025417600481600019169055506102ae806100656000396000f300608060405260043610610078576000357c0100000000000000000000000000000000000000000000000000000000900463ffffffff1680630cc0e1fb1461007d57806328f371aa146100b05780636b1d752b146100df578063d4b8399214610112578063daea85c514610145578063eb6fd96a14610188575b600080fd5b34801561008957600080fd5b506100926101bb565b60405180826000191660001916815260200191505060405180910390f35b3480156100bc57600080fd5b506100c56101c1565b604051808215151515815260200191505060405180910390f35b3480156100eb57600080fd5b506100f46101d7565b60405180826000191660001916815260200191505060405180910390f35b34801561011e57600080fd5b506101276101dd565b60405180826000191660001916815260200191505060405180910390f35b34801561015157600080fd5b50610186600480360381019080803573ffffffffffffffffffffffffffffffffffffffff1690602001909291905050506101e3565b005b34801561019457600080fd5b5061019d61027c565b60405180826000191660001916815260200191505060405180910390f35b60035481565b6000600454600019166001546000191614905090565b60025481565b60045481565b3373ffffffffffffffffffffffffffffffffffffffff166001028173ffffffffffffffffffffffffffffffffffffffff16600102176001816000191690555060016000808373ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff16815260200190815260200160002060006101000a81548160ff02191690831515021790555050565b600154815600a165627a7a7230582089b5f99476d642b66a213c12cd198207b2e813bb1caf3bd75e22be535ebf5d130029"
 	byteCodes, err := hex.DecodeString(data)
 	require.NoError(err)
-	execution, err := action.NewExecution("", 1, big.NewInt(0), 0, big.NewInt(0), byteCodes)
-	require.NoError(err)
+	execution := action.NewExecution("", big.NewInt(0), byteCodes)
 	request := &iotexapi.EstimateActionGasConsumptionRequest{
 		Action: &iotexapi.EstimateActionGasConsumptionRequest_Execution{
 			Execution: execution.Proto(),
@@ -1564,8 +1563,7 @@ func TestGrpcServer_EstimateActionGasConsumptionIntegrity(t *testing.T) {
 	require.Equal(uint64(286579), res.Gas)
 
 	// test for transfer
-	tran, err := action.NewTransfer(0, big.NewInt(0), "", []byte("123"), 0, big.NewInt(0))
-	require.NoError(err)
+	tran := action.NewTransfer(big.NewInt(0), "", []byte("123"))
 	request = &iotexapi.EstimateActionGasConsumptionRequest{
 		Action: &iotexapi.EstimateActionGasConsumptionRequest_Transfer{
 			Transfer: tran.Proto(),
@@ -1577,12 +1575,9 @@ func TestGrpcServer_EstimateActionGasConsumptionIntegrity(t *testing.T) {
 	require.Equal(uint64(10300), res.Gas)
 
 	var (
-		gaslimit   = uint64(1000000)
-		gasprice   = big.NewInt(10)
 		canAddress = "io1xpq62aw85uqzrccg9y5hnryv8ld2nkpycc3gza"
 		payload    = []byte("123")
 		amount     = big.NewInt(10)
-		nonce      = uint64(0)
 		duration   = uint32(1000)
 		autoStake  = true
 		index      = uint64(10)
@@ -1590,7 +1585,7 @@ func TestGrpcServer_EstimateActionGasConsumptionIntegrity(t *testing.T) {
 
 	// staking related
 	// case I: test for StakeCreate
-	cs, err := action.NewCreateStake(nonce, canAddress, amount.String(), duration, autoStake, payload, gaslimit, gasprice)
+	cs, err := action.NewCreateStake(canAddress, amount.String(), duration, autoStake, payload)
 	require.NoError(err)
 	request = &iotexapi.EstimateActionGasConsumptionRequest{
 		Action: &iotexapi.EstimateActionGasConsumptionRequest_StakeCreate{
@@ -1603,8 +1598,7 @@ func TestGrpcServer_EstimateActionGasConsumptionIntegrity(t *testing.T) {
 	require.Equal(uint64(10300), res.Gas)
 
 	// case II: test for StakeUnstake
-	us, err := action.NewUnstake(nonce, index, payload, gaslimit, gasprice)
-	require.NoError(err)
+	us := action.NewUnstake(index, payload)
 	request = &iotexapi.EstimateActionGasConsumptionRequest{
 		Action: &iotexapi.EstimateActionGasConsumptionRequest_StakeUnstake{
 			StakeUnstake: us.Proto(),
@@ -1616,8 +1610,7 @@ func TestGrpcServer_EstimateActionGasConsumptionIntegrity(t *testing.T) {
 	require.Equal(uint64(10300), res.Gas)
 
 	// case III: test for StakeWithdraw
-	ws, err := action.NewWithdrawStake(nonce, index, payload, gaslimit, gasprice)
-	require.NoError(err)
+	ws := action.NewWithdrawStake(index, payload)
 	request = &iotexapi.EstimateActionGasConsumptionRequest{
 		Action: &iotexapi.EstimateActionGasConsumptionRequest_StakeWithdraw{
 			StakeWithdraw: ws.Proto(),
@@ -1629,7 +1622,7 @@ func TestGrpcServer_EstimateActionGasConsumptionIntegrity(t *testing.T) {
 	require.Equal(uint64(10300), res.Gas)
 
 	// Case IV: test for StakeDeposit
-	ds, err := action.NewDepositToStake(nonce, 1, amount.String(), payload, gaslimit, gasprice)
+	ds, err := action.NewDepositToStake(1, amount.String(), payload)
 	require.NoError(err)
 	request = &iotexapi.EstimateActionGasConsumptionRequest{
 		Action: &iotexapi.EstimateActionGasConsumptionRequest_StakeAddDeposit{
@@ -1642,7 +1635,7 @@ func TestGrpcServer_EstimateActionGasConsumptionIntegrity(t *testing.T) {
 	require.Equal(uint64(10300), res.Gas)
 
 	// Case V: test for StakeChangeCandidate
-	cc, err := action.NewChangeCandidate(nonce, canAddress, index, payload, gaslimit, gasprice)
+	cc := action.NewChangeCandidate(canAddress, index, payload)
 	require.NoError(err)
 	request = &iotexapi.EstimateActionGasConsumptionRequest{
 		Action: &iotexapi.EstimateActionGasConsumptionRequest_StakeChangeCandidate{
@@ -1655,8 +1648,7 @@ func TestGrpcServer_EstimateActionGasConsumptionIntegrity(t *testing.T) {
 	require.Equal(uint64(10300), res.Gas)
 
 	// Case VI: test for StakeRestake
-	rs, err := action.NewRestake(nonce, index, duration, autoStake, payload, gaslimit, gasprice)
-	require.NoError(err)
+	rs := action.NewRestake(index, duration, autoStake, payload)
 	request = &iotexapi.EstimateActionGasConsumptionRequest{
 		Action: &iotexapi.EstimateActionGasConsumptionRequest_StakeRestake{
 			StakeRestake: rs.Proto(),
@@ -1668,7 +1660,7 @@ func TestGrpcServer_EstimateActionGasConsumptionIntegrity(t *testing.T) {
 	require.Equal(uint64(10300), res.Gas)
 
 	// Case VII: test for StakeTransfer
-	ts, err := action.NewTransferStake(nonce, canAddress, index, payload, gaslimit, gasprice)
+	ts, err := action.NewTransferStake(canAddress, index, payload)
 	require.NoError(err)
 	request = &iotexapi.EstimateActionGasConsumptionRequest{
 		Action: &iotexapi.EstimateActionGasConsumptionRequest_StakeTransferOwnership{
@@ -1681,7 +1673,7 @@ func TestGrpcServer_EstimateActionGasConsumptionIntegrity(t *testing.T) {
 	require.Equal(uint64(10300), res.Gas)
 
 	// Case VIII: test for CandidateRegister
-	cr, err := action.NewCandidateRegister(nonce, canAddress, canAddress, canAddress, canAddress, amount.String(), duration, autoStake, payload, gaslimit, gasprice)
+	cr, err := action.NewCandidateRegister(canAddress, canAddress, canAddress, canAddress, amount.String(), duration, autoStake, payload)
 	require.NoError(err)
 	request = &iotexapi.EstimateActionGasConsumptionRequest{
 		Action: &iotexapi.EstimateActionGasConsumptionRequest_CandidateRegister{
@@ -1694,7 +1686,7 @@ func TestGrpcServer_EstimateActionGasConsumptionIntegrity(t *testing.T) {
 	require.Equal(uint64(10300), res.Gas)
 
 	// Case IX: test for CandidateUpdate
-	cu, err := action.NewCandidateUpdate(nonce, canAddress, canAddress, canAddress, gaslimit, gasprice)
+	cu, err := action.NewCandidateUpdate(canAddress, canAddress, canAddress)
 	require.NoError(err)
 	request = &iotexapi.EstimateActionGasConsumptionRequest{
 		Action: &iotexapi.EstimateActionGasConsumptionRequest_CandidateUpdate{
@@ -1829,7 +1821,6 @@ func TestGrpcServer_ReadCandidatesByEpochIntegrity(t *testing.T) {
 				indexer,
 				cfg.genesis.NumCandidateDelegates,
 				cfg.genesis.NumDelegates,
-				cfg.genesis.DardanellesNumSubEpochs,
 				cfg.genesis.ProductivityThreshold,
 				cfg.genesis.ProbationEpochPeriod,
 				cfg.genesis.UnproductiveDelegateMaxCacheSize,
@@ -1902,7 +1893,6 @@ func TestGrpcServer_ReadBlockProducersByEpochIntegrity(t *testing.T) {
 				indexer,
 				test.numCandidateDelegates,
 				cfg.genesis.NumDelegates,
-				cfg.genesis.DardanellesNumSubEpochs,
 				cfg.genesis.ProductivityThreshold,
 				cfg.genesis.ProbationEpochPeriod,
 				cfg.genesis.UnproductiveDelegateMaxCacheSize,
@@ -1975,7 +1965,6 @@ func TestGrpcServer_ReadActiveBlockProducersByEpochIntegrity(t *testing.T) {
 				indexer,
 				cfg.genesis.NumCandidateDelegates,
 				test.numDelegates,
-				cfg.genesis.DardanellesNumSubEpochs,
 				cfg.genesis.ProductivityThreshold,
 				cfg.genesis.ProbationEpochPeriod,
 				cfg.genesis.UnproductiveDelegateMaxCacheSize,
@@ -2071,7 +2060,11 @@ func TestGrpcServer_GetEpochMetaIntegrity(t *testing.T) {
 		} else if test.pollProtocolType == "governanceChainCommittee" {
 			committee := mock_committee.NewMockCommittee(ctrl)
 			mbc := mock_blockchain.NewMockBlockchain(ctrl)
-			mbc.EXPECT().Genesis().Return(cfg.genesis).Times(3)
+			mbc.EXPECT().Genesis().Return(cfg.genesis).AnyTimes()
+			mbc.EXPECT().Context(gomock.Any()).Return(protocol.WithBlockchainCtx(context.Background(), protocol.BlockchainCtx{
+				GetBlockHash: func(uint64) (hash.Hash256, error) { return hash.ZeroHash256, nil },
+				GetBlockTime: func(uint64) (time.Time, error) { return time.Now(), nil },
+			}), nil).AnyTimes()
 			indexer, err := poll.NewCandidateIndexer(db.NewMemKVStore())
 			require.NoError(err)
 			slasher, _ := poll.NewSlasher(
@@ -2117,7 +2110,6 @@ func TestGrpcServer_GetEpochMetaIntegrity(t *testing.T) {
 				indexer,
 				cfg.genesis.NumCandidateDelegates,
 				cfg.genesis.NumDelegates,
-				cfg.genesis.DardanellesNumSubEpochs,
 				cfg.genesis.ProductivityThreshold,
 				cfg.genesis.ProbationEpochPeriod,
 				cfg.genesis.UnproductiveDelegateMaxCacheSize,
@@ -2130,9 +2122,9 @@ func TestGrpcServer_GetEpochMetaIntegrity(t *testing.T) {
 				cfg.chain.PollInitialCandidatesInterval,
 				slasher)
 			require.NoError(pol.ForceRegister(registry))
-			committee.EXPECT().HeightByTime(gomock.Any()).Return(test.epochData.GravityChainStartHeight, nil)
+			committee.EXPECT().HeightByTime(gomock.Any()).Return(test.epochData.GravityChainStartHeight, nil).AnyTimes()
 
-			mbc.EXPECT().TipHeight().Return(uint64(4)).Times(4)
+			mbc.EXPECT().TipHeight().Return(uint64(4)).AnyTimes()
 			mbc.EXPECT().BlockHeaderByHeight(gomock.Any()).DoAndReturn(func(height uint64) (*block.Header, error) {
 				if height > 0 && height <= 4 {
 					pk := identityset.PrivateKey(int(height))
@@ -2344,7 +2336,7 @@ func TestGrpcServer_GetActionByActionHashIntegrity(t *testing.T) {
 	}()
 
 	for _, test := range _getActionByActionHashTest {
-		ret, _, _, _, err := svr.core.ActionByActionHash(test.h)
+		ret, _, _, err := svr.core.ActionByActionHash(test.h)
 		require.NoError(err)
 		require.Equal(test.expectedNounce, ret.Envelope.Nonce())
 	}
@@ -2501,8 +2493,7 @@ func TestGrpcServer_GetEstimateGasSpecialIntegrity(t *testing.T) {
 	data := "43d726d6"
 	byteCodes, err := hex.DecodeString(data)
 	require.NoError(err)
-	execution, err := action.NewExecution(contract, 2, big.NewInt(0), 0, big.NewInt(0), byteCodes)
-	require.NoError(err)
+	execution := action.NewExecution(contract, big.NewInt(0), byteCodes)
 	request := &iotexapi.EstimateActionGasConsumptionRequest{
 		Action: &iotexapi.EstimateActionGasConsumptionRequest_Execution{
 			Execution: execution.Proto(),

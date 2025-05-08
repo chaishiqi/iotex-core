@@ -13,13 +13,12 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 
-	"github.com/iotexproject/iotex-core/ioctl/config"
-	"github.com/iotexproject/iotex-core/ioctl/util"
-	"github.com/iotexproject/iotex-core/test/mock/mock_ioctlclient"
+	"github.com/iotexproject/iotex-core/v2/ioctl/config"
+	"github.com/iotexproject/iotex-core/v2/ioctl/util"
+	"github.com/iotexproject/iotex-core/v2/test/mock/mock_ioctlclient"
 )
 
 func TestNewContractCompileCmd(t *testing.T) {
-	t.Skip("skip this test because it requires special solc version installed")
 	skipWithoutSolc(t)
 	require := require.New(t)
 	ctrl := gomock.NewController(t)

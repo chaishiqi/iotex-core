@@ -12,9 +12,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/iotexproject/iotex-core/config"
-	"github.com/iotexproject/iotex-core/pkg/probe"
-	"github.com/iotexproject/iotex-core/testutil"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/config"
+	"github.com/iotexproject/iotex-core/v2/pkg/probe"
+	"github.com/iotexproject/iotex-core/v2/testutil"
 )
 
 func TestStop(t *testing.T) {
@@ -78,24 +79,32 @@ func newConfig(t *testing.T) (config.Config, func()) {
 	require.NoError(err)
 	indexPath, err := testutil.PathOfTempFile("indxer.db")
 	require.NoError(err)
+	blobPath, err := testutil.PathOfTempFile("blob.db")
+	require.NoError(err)
 	contractIndexPath, err := testutil.PathOfTempFile("contractindxer.db")
 	require.NoError(err)
-	sgdPath, err := testutil.PathOfTempFile("sgdindex.db")
-	require.NoError(err)
+	testActionStorePath := t.TempDir()
 	cfg := config.Default
+	cfg.Genesis = genesis.TestDefault()
 	cfg.API.GRPCPort = testutil.RandomPort()
 	cfg.API.HTTPPort = testutil.RandomPort()
 	cfg.API.WebSocketPort = testutil.RandomPort()
 	cfg.Chain.ChainDBPath = dbPath
 	cfg.Chain.TrieDBPath = triePath
-	cfg.Chain.SGDIndexDBPath = sgdPath
+	cfg.Chain.BlobStoreDBPath = blobPath
 	cfg.Chain.TrieDBPatchFile = ""
+	cfg.Chain.BlobStoreDBPath = blobPath
 	cfg.Chain.ContractStakingIndexDBPath = contractIndexPath
+	if cfg.ActPool.Store != nil {
+		cfg.ActPool.Store.Datadir = testActionStorePath
+	}
 	return cfg, func() {
 		testutil.CleanupPath(dbPath)
 		testutil.CleanupPath(triePath)
 		testutil.CleanupPath(indexPath)
+		testutil.CleanupPath(blobPath)
 		testutil.CleanupPath(contractIndexPath)
-		testutil.CleanupPath(sgdPath)
+		testutil.CleanupPath(blobPath)
+		testutil.CleanupPath(testActionStorePath)
 	}
 }

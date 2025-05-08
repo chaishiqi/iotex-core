@@ -1,3 +1,8 @@
+// Copyright (c) 2024 IoTeX Foundation
+// This source code is provided 'as is' and no warranties are given as to title or non-infringement, merchantability
+// or fitness for purpose and, to the extent permitted by law, all liability for your use of the code is disclaimed.
+// This source code is governed by Apache License 2.0 that can be found in the LICENSE file.
+
 package staking
 
 import (
@@ -13,17 +18,17 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	accountutil "github.com/iotexproject/iotex-core/action/protocol/account/util"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/pkg/unit"
-	"github.com/iotexproject/iotex-core/state"
-	"github.com/iotexproject/iotex-core/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	accountutil "github.com/iotexproject/iotex-core/v2/action/protocol/account/util"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/pkg/unit"
+	"github.com/iotexproject/iotex-core/v2/state"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
 )
 
 type appendAction struct {
-	act       func() action.Action
+	act       func() action.Envelope
 	status    iotextypes.ReceiptStatus
 	validator func(t *testing.T)
 }
@@ -276,10 +281,10 @@ func TestProtocol_HandleCandidateEndorsement(t *testing.T) {
 			true,
 			true,
 			&appendAction{
-				func() action.Action {
-					act, err := action.NewUnstake(0, 1, []byte{}, uint64(1000000), big.NewInt(1000))
-					require.NoError(err)
-					return act
+				func() action.Envelope {
+					act := action.NewUnstake(1, []byte{})
+					return (&action.EnvelopeBuilder{}).SetNonce(0).SetGasLimit(1000000).
+						SetGasPrice(big.NewInt(1000)).SetAction(act).Build()
 				},
 				iotextypes.ReceiptStatus_ErrInvalidBucketType,
 				nil,
@@ -303,10 +308,11 @@ func TestProtocol_HandleCandidateEndorsement(t *testing.T) {
 			true,
 			true,
 			&appendAction{
-				func() action.Action {
-					act, err := action.NewChangeCandidate(0, "test3", 1, []byte{}, uint64(1000000), big.NewInt(1000))
-					require.NoError(err)
-					return act
+				func() action.Envelope {
+					act := action.NewChangeCandidate("test3", 1, []byte{})
+					return (&action.EnvelopeBuilder{}).SetNonce(0).
+						SetGasLimit(1000000).SetGasPrice(big.NewInt(1000)).
+						SetAction(act).Build()
 				},
 				iotextypes.ReceiptStatus_ErrInvalidBucketType, //todo fix
 				nil,
@@ -330,13 +336,15 @@ func TestProtocol_HandleCandidateEndorsement(t *testing.T) {
 			true,
 			true,
 			&appendAction{
-				func() action.Action {
-					act := action.NewCandidateEndorsement(0, uint64(1000000), big.NewInt(1000), 1, false)
-					return act
+				func() action.Envelope {
+					act := action.NewCandidateEndorsementLegacy(1, false)
+					return (&action.EnvelopeBuilder{}).SetNonce(0).
+						SetGasLimit(1000000).SetGasPrice(big.NewInt(1000)).
+						SetAction(act).Build()
 				},
 				iotextypes.ReceiptStatus_Success,
 				func(t *testing.T) {
-					csm, err := NewCandidateStateManager(sm, false)
+					csm, err := NewCandidateStateManager(sm)
 					require.NoError(err)
 					esm := NewEndorsementStateManager(csm.SM())
 					bucket, err := csm.getBucket(1)
@@ -366,13 +374,15 @@ func TestProtocol_HandleCandidateEndorsement(t *testing.T) {
 			true,
 			true,
 			&appendAction{
-				func() action.Action {
-					act := action.NewCandidateEndorsement(0, uint64(1000000), big.NewInt(1000), 1, false)
-					return act
+				func() action.Envelope {
+					act := action.NewCandidateEndorsementLegacy(1, false)
+					return (&action.EnvelopeBuilder{}).SetNonce(0).
+						SetGasLimit(1000000).SetGasPrice(big.NewInt(1000)).
+						SetAction(act).Build()
 				},
 				iotextypes.ReceiptStatus_Success,
 				func(t *testing.T) {
-					csm, err := NewCandidateStateManager(sm, false)
+					csm, err := NewCandidateStateManager(sm)
 					require.NoError(err)
 					esm := NewEndorsementStateManager(csm.SM())
 					bucket, err := csm.getBucket(1)
@@ -496,8 +506,10 @@ func TestProtocol_HandleCandidateEndorsement(t *testing.T) {
 				sm, p, _, _ = initTestStateFromIds(test.initBucketCfgIds, test.initCandidateCfgIds)
 			}
 			require.NoError(setupAccount(sm, test.caller, test.initBalance))
-			act := action.NewCandidateEndorsement(nonce, test.gasLimit, test.gasPrice, test.bucketID, test.endorse)
+			act := action.NewCandidateEndorsementLegacy(test.bucketID, test.endorse)
 			IntrinsicGas, _ := act.IntrinsicGas()
+			elp := builder.SetNonce(nonce).SetGasLimit(test.gasLimit).
+				SetGasPrice(test.gasPrice).SetAction(act).Build()
 			ctx := protocol.WithActionCtx(context.Background(), protocol.ActionCtx{
 				Caller:       test.caller,
 				GasPrice:     test.gasPrice,
@@ -509,15 +521,16 @@ func TestProtocol_HandleCandidateEndorsement(t *testing.T) {
 				BlockTimeStamp: timeBlock,
 				GasLimit:       test.blkGasLimit,
 			})
-			cfg := deepcopy.Copy(genesis.Default).(genesis.Genesis)
+			ctx = protocol.WithBlockchainCtx(ctx, protocol.BlockchainCtx{Tip: protocol.TipInfo{}})
+			cfg := deepcopy.Copy(genesis.TestDefault()).(genesis.Genesis)
 			cfg.TsunamiBlockHeight = 1
 			ctx = genesis.WithGenesisContext(ctx, cfg)
 			ctx = protocol.WithFeatureCtx(protocol.WithFeatureWithHeightCtx(ctx))
-			require.Equal(test.err, errors.Cause(p.Validate(ctx, act, sm)))
+			require.Equal(test.err, errors.Cause(p.Validate(ctx, elp, sm)))
 			if test.err != nil {
 				return
 			}
-			r, err := p.Handle(ctx, act, sm)
+			r, err := p.Handle(ctx, elp, sm)
 			require.NoError(err)
 			if r != nil {
 				require.Equal(uint64(test.status), r.Status)
@@ -528,19 +541,12 @@ func TestProtocol_HandleCandidateEndorsement(t *testing.T) {
 			if test.append != nil {
 				nonce = nonce + 1
 				appendIntrinsicGas, _ = act.IntrinsicGas()
-				ctx := protocol.WithActionCtx(context.Background(), protocol.ActionCtx{
+				ctx := protocol.WithActionCtx(ctx, protocol.ActionCtx{
 					Caller:       test.caller,
 					GasPrice:     test.gasPrice,
 					IntrinsicGas: IntrinsicGas,
 					Nonce:        nonce,
 				})
-				ctx = protocol.WithBlockCtx(ctx, protocol.BlockCtx{
-					BlockHeight:    1,
-					BlockTimeStamp: timeBlock,
-					GasLimit:       test.blkGasLimit,
-				})
-				ctx = genesis.WithGenesisContext(ctx, cfg)
-				ctx = protocol.WithFeatureCtx(protocol.WithFeatureWithHeightCtx(ctx))
 				r, err = p.Handle(ctx, test.append.act(), sm)
 				require.NoError(err)
 				if r != nil {
@@ -555,7 +561,7 @@ func TestProtocol_HandleCandidateEndorsement(t *testing.T) {
 
 			if test.err == nil && test.status == iotextypes.ReceiptStatus_Success {
 				// check candidate
-				csm, err := NewCandidateStateManager(sm, false)
+				csm, err := NewCandidateStateManager(sm)
 				require.NoError(err)
 				for _, expectCand := range test.expectCandidates {
 					candidate := csm.GetByOwner(expectCand.owner)
@@ -582,7 +588,7 @@ func TestProtocol_HandleCandidateEndorsement(t *testing.T) {
 				// test staker's account
 				caller, err := accountutil.LoadAccount(sm, test.caller)
 				require.NoError(err)
-				actCost, err := act.Cost()
+				actCost, err := elp.Cost()
 				actCost.Add(actCost, big.NewInt(0).Mul(test.gasPrice, big.NewInt(0).SetUint64(appendIntrinsicGas)))
 				require.NoError(err)
 				total := big.NewInt(0)
@@ -651,8 +657,10 @@ func TestProtocol_HandleTransferEndorsement(t *testing.T) {
 		},
 	} {
 		require.NoError(setupAccount(sm, test.caller, test.initBalance))
-		act, _ := action.NewTransferStake(test.nonce, test.cand.String(), test.bucketID, nil, test.gasLimit, test.gasPrice)
+		act, _ := action.NewTransferStake(test.cand.String(), test.bucketID, nil)
 		IntrinsicGas, _ := act.IntrinsicGas()
+		elp := builder.SetNonce(test.nonce).SetGasLimit(test.gasLimit).
+			SetGasPrice(test.gasPrice).SetAction(act).Build()
 		ctx := protocol.WithActionCtx(context.Background(), protocol.ActionCtx{
 			Caller:       test.caller,
 			GasPrice:     test.gasPrice,
@@ -664,15 +672,16 @@ func TestProtocol_HandleTransferEndorsement(t *testing.T) {
 			BlockTimeStamp: timeBlock,
 			GasLimit:       test.blkGasLimit,
 		})
-		cfg := deepcopy.Copy(genesis.Default).(genesis.Genesis)
-		cfg.ToBeEnabledBlockHeight = 1
+		ctx = protocol.WithBlockchainCtx(ctx, protocol.BlockchainCtx{Tip: protocol.TipInfo{}})
+		cfg := deepcopy.Copy(genesis.TestDefault()).(genesis.Genesis)
+		cfg.TsunamiBlockHeight = 1
 		ctx = genesis.WithGenesisContext(ctx, cfg)
 		ctx = protocol.WithFeatureCtx(protocol.WithFeatureWithHeightCtx(ctx))
-		require.Equal(test.err, errors.Cause(p.Validate(ctx, act, sm)))
+		require.Equal(test.err, errors.Cause(p.Validate(ctx, elp, sm)))
 		if test.err != nil {
 			return
 		}
-		r, err := p.Handle(ctx, act, sm)
+		r, err := p.Handle(ctx, elp, sm)
 		require.NoError(err)
 		if r != nil {
 			require.EqualValues(test.status, r.Status)
@@ -724,8 +733,10 @@ func TestProtocol_HandleWithdrawEndorsement(t *testing.T) {
 		},
 	} {
 		require.NoError(setupAccount(sm, test.caller, test.initBalance))
-		act, _ := action.NewWithdrawStake(test.nonce, test.bucketID, nil, test.gasLimit, test.gasPrice)
+		act := action.NewWithdrawStake(test.bucketID, nil)
 		IntrinsicGas, _ := act.IntrinsicGas()
+		elp := builder.SetNonce(test.nonce).SetGasLimit(test.gasLimit).
+			SetGasPrice(test.gasPrice).SetAction(act).Build()
 		ctx := protocol.WithActionCtx(context.Background(), protocol.ActionCtx{
 			Caller:       test.caller,
 			GasPrice:     test.gasPrice,
@@ -737,15 +748,16 @@ func TestProtocol_HandleWithdrawEndorsement(t *testing.T) {
 			BlockTimeStamp: timeBlock,
 			GasLimit:       test.blkGasLimit,
 		})
-		cfg := deepcopy.Copy(genesis.Default).(genesis.Genesis)
-		cfg.ToBeEnabledBlockHeight = 1
+		ctx = protocol.WithBlockchainCtx(ctx, protocol.BlockchainCtx{Tip: protocol.TipInfo{}})
+		cfg := deepcopy.Copy(genesis.TestDefault()).(genesis.Genesis)
+		cfg.TsunamiBlockHeight = 1
 		ctx = genesis.WithGenesisContext(ctx, cfg)
 		ctx = protocol.WithFeatureCtx(protocol.WithFeatureWithHeightCtx(ctx))
-		require.Equal(test.err, errors.Cause(p.Validate(ctx, act, sm)))
+		require.Equal(test.err, errors.Cause(p.Validate(ctx, elp, sm)))
 		if test.err != nil {
 			return
 		}
-		r, err := p.Handle(ctx, act, sm)
+		r, err := p.Handle(ctx, elp, sm)
 		require.NoError(err)
 		if r != nil {
 			require.EqualValues(test.status, r.Status)
@@ -797,8 +809,10 @@ func TestProtocol_HandleRestakeEndorsement(t *testing.T) {
 		},
 	} {
 		require.NoError(setupAccount(sm, test.caller, test.initBalance))
-		act, _ := action.NewRestake(test.nonce, test.bucketID, 3, false, nil, test.gasLimit, test.gasPrice)
+		act := action.NewRestake(test.bucketID, 3, false, nil)
 		IntrinsicGas, _ := act.IntrinsicGas()
+		elp := builder.SetNonce(test.nonce).SetGasLimit(test.gasLimit).
+			SetGasPrice(test.gasPrice).SetAction(act).Build()
 		ctx := protocol.WithActionCtx(context.Background(), protocol.ActionCtx{
 			Caller:       test.caller,
 			GasPrice:     test.gasPrice,
@@ -810,15 +824,16 @@ func TestProtocol_HandleRestakeEndorsement(t *testing.T) {
 			BlockTimeStamp: timeBlock,
 			GasLimit:       test.blkGasLimit,
 		})
-		cfg := deepcopy.Copy(genesis.Default).(genesis.Genesis)
-		cfg.ToBeEnabledBlockHeight = 1
+		ctx = protocol.WithBlockchainCtx(ctx, protocol.BlockchainCtx{Tip: protocol.TipInfo{}})
+		cfg := deepcopy.Copy(genesis.TestDefault()).(genesis.Genesis)
+		cfg.TsunamiBlockHeight = 1
 		ctx = genesis.WithGenesisContext(ctx, cfg)
 		ctx = protocol.WithFeatureCtx(protocol.WithFeatureWithHeightCtx(ctx))
-		require.Equal(test.err, errors.Cause(p.Validate(ctx, act, sm)))
+		require.Equal(test.err, errors.Cause(p.Validate(ctx, elp, sm)))
 		if test.err != nil {
 			return
 		}
-		r, err := p.Handle(ctx, act, sm)
+		r, err := p.Handle(ctx, elp, sm)
 		require.NoError(err)
 		if r != nil {
 			require.EqualValues(test.status, r.Status)
@@ -870,8 +885,10 @@ func TestProtocol_HandleDepositEndorsement(t *testing.T) {
 		},
 	} {
 		require.NoError(setupAccount(sm, test.caller, test.initBalance))
-		act, _ := action.NewDepositToStake(test.nonce, test.bucketID, "300000", nil, test.gasLimit, test.gasPrice)
+		act, _ := action.NewDepositToStake(test.bucketID, "300000", nil)
 		IntrinsicGas, _ := act.IntrinsicGas()
+		elp := builder.SetNonce(test.nonce).SetGasLimit(test.gasLimit).
+			SetGasPrice(test.gasPrice).SetAction(act).Build()
 		ctx := protocol.WithActionCtx(context.Background(), protocol.ActionCtx{
 			Caller:       test.caller,
 			GasPrice:     test.gasPrice,
@@ -883,15 +900,16 @@ func TestProtocol_HandleDepositEndorsement(t *testing.T) {
 			BlockTimeStamp: timeBlock,
 			GasLimit:       test.blkGasLimit,
 		})
-		cfg := deepcopy.Copy(genesis.Default).(genesis.Genesis)
-		cfg.ToBeEnabledBlockHeight = 1
+		ctx = protocol.WithBlockchainCtx(ctx, protocol.BlockchainCtx{Tip: protocol.TipInfo{}})
+		cfg := deepcopy.Copy(genesis.TestDefault()).(genesis.Genesis)
+		cfg.TsunamiBlockHeight = 1
 		ctx = genesis.WithGenesisContext(ctx, cfg)
 		ctx = protocol.WithFeatureCtx(protocol.WithFeatureWithHeightCtx(ctx))
-		require.Equal(test.err, errors.Cause(p.Validate(ctx, act, sm)))
+		require.Equal(test.err, errors.Cause(p.Validate(ctx, elp, sm)))
 		if test.err != nil {
 			return
 		}
-		r, err := p.Handle(ctx, act, sm)
+		r, err := p.Handle(ctx, elp, sm)
 		require.NoError(err)
 		if r != nil {
 			require.EqualValues(test.status, r.Status)
@@ -952,8 +970,10 @@ func TestProtocol_HandleConsignmentEndorsement(t *testing.T) {
 			sk = identityset.PrivateKey(3).HexString()
 		}
 		consign := newconsignment(require, test.bucketID, test.nonce, sk, test.caller.String(), "Ethereum", _reclaim, false)
-		act, _ := action.NewTransferStake(test.nonce, test.caller.String(), test.bucketID, consign, test.gasLimit, test.gasPrice)
+		act, _ := action.NewTransferStake(test.caller.String(), test.bucketID, consign)
 		IntrinsicGas, _ := act.IntrinsicGas()
+		elp := builder.SetNonce(test.nonce).SetGasLimit(test.gasLimit).
+			SetGasPrice(test.gasPrice).SetAction(act).Build()
 		ctx := protocol.WithActionCtx(context.Background(), protocol.ActionCtx{
 			Caller:       test.caller,
 			GasPrice:     test.gasPrice,
@@ -965,16 +985,17 @@ func TestProtocol_HandleConsignmentEndorsement(t *testing.T) {
 			BlockTimeStamp: timeBlock,
 			GasLimit:       test.blkGasLimit,
 		})
-		cfg := deepcopy.Copy(genesis.Default).(genesis.Genesis)
+		ctx = protocol.WithBlockchainCtx(ctx, protocol.BlockchainCtx{Tip: protocol.TipInfo{}})
+		cfg := deepcopy.Copy(genesis.TestDefault()).(genesis.Genesis)
 		cfg.GreenlandBlockHeight = 1
-		cfg.ToBeEnabledBlockHeight = 1
+		cfg.TsunamiBlockHeight = 1
 		ctx = genesis.WithGenesisContext(ctx, cfg)
 		ctx = protocol.WithFeatureCtx(protocol.WithFeatureWithHeightCtx(ctx))
-		require.Equal(test.err, errors.Cause(p.Validate(ctx, act, sm)))
+		require.Equal(test.err, errors.Cause(p.Validate(ctx, elp, sm)))
 		if test.err != nil {
 			return
 		}
-		r, err := p.Handle(ctx, act, sm)
+		r, err := p.Handle(ctx, elp, sm)
 		require.NoError(err)
 		if r != nil {
 			require.EqualValues(test.status, r.Status)

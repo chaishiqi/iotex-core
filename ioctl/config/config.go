@@ -13,9 +13,9 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v2"
 
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/ioctl/output"
-	"github.com/iotexproject/iotex-core/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/ioctl/output"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
 )
 
 // Directories
@@ -73,8 +73,24 @@ type Config struct {
 	IPFSEndpoint string `json:"ipfsEndpoint" yaml:"ipfsEndpoint"`
 	// IPFSGateway ipfs gateway for resource fetching (with scheme)
 	IPFSGateway string `json:"ipfsGateway" yaml:"ipfsGateway"`
-	// WsRegisterContract w3bstream project register contract address
-	WsRegisterContract string `json:"wsRegisterContract" yaml:"wsRegisterContract"`
+	// WsProjectRegisterContract w3bstream project register contract address
+	WsProjectRegisterContract string `json:"wsProjectRegisterContract" yaml:"wsProjectRegisterContract"`
+	// WsProjectStoreContract w3bstream project store contract address
+	WsProjectStoreContract string `json:"wsProjectStoreContract" yaml:"wsProjectStoreContract"`
+	// WsFleetManagementContract w3bstream fleet management contract address
+	WsFleetManagementContract string `json:"wsFleetManagementContract" yaml:"wsFleetManagementContract"`
+	// WsProverStoreContract w3bstream Prover store contract address
+	WsProverStoreContract string `json:"wsProverStoreContract" yaml:"wsProverStoreContract"`
+	// WsProjectDevicesContract w3bstream Project devices contract address
+	WsProjectDevicesContract string `json:"wsProjectDevicesContract" yaml:"wsProjectDevicesContract"`
+	// WsRouterContract w3bstream Router contract address
+	WsRouterContract string `json:"wsRouterContract" yaml:"wsRouterContract"`
+	// WsVmTypeContract w3bstream VMType contract address
+	WsVmTypeContract string `json:"wsVmTypeContract" yaml:"wsVmTypeContract"`
+	// IoidProjectRegisterContract is the ioID project register contract address
+	IoidProjectRegisterContract string `json:"ioidProjectRegisterContract" yaml:"ioidProjectRegisterContract"`
+	// IoidProjectStoreContract is the ioID project store contract address
+	IoidProjectStoreContract string `json:"ioidProjectStoreContract" yaml:"ioidProjectStoreContract"`
 }
 
 var (
@@ -140,9 +156,39 @@ func init() {
 		ReadConfig.IPFSGateway = _defaultIPFSGateway
 		completeness = false
 	}
-	if ReadConfig.WsRegisterContract == "" {
-		ReadConfig.WsRegisterContract = _defaultWsRegisterContract
+	if ReadConfig.WsProjectRegisterContract == "" {
+		ReadConfig.WsProjectRegisterContract = _defaultWsProjectRegisterContract
 		completeness = false
+	}
+	if ReadConfig.WsProjectStoreContract == "" {
+		ReadConfig.WsProjectStoreContract = _defaultWsProjectStoreContract
+		completeness = false
+	}
+	if ReadConfig.WsFleetManagementContract == "" {
+		ReadConfig.WsFleetManagementContract = _defaultWsFleetManagementContract
+		completeness = false
+	}
+	if ReadConfig.WsProverStoreContract == "" {
+		ReadConfig.WsProverStoreContract = _defaultWsProverStoreContract
+		completeness = false
+	}
+	if ReadConfig.WsProjectDevicesContract == "" {
+		ReadConfig.WsProjectDevicesContract = _defaultWsProjectDevicesContract
+		completeness = false
+	}
+	if ReadConfig.WsRouterContract == "" {
+		ReadConfig.WsRouterContract = _defaultWsRouterContract
+		completeness = false
+	}
+	if ReadConfig.WsVmTypeContract == "" {
+		ReadConfig.WsVmTypeContract = _defaultWsVmTypeContract
+		completeness = false
+	}
+	if ReadConfig.IoidProjectRegisterContract == "" {
+		ReadConfig.IoidProjectRegisterContract = _defaultIoidProjectRegisterContract
+	}
+	if ReadConfig.IoidProjectStoreContract == "" {
+		ReadConfig.IoidProjectStoreContract = _defaultIoidProjectStoreContract
 	}
 	if !completeness {
 		err := writeConfig()

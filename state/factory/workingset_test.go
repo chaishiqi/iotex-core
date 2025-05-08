@@ -15,17 +15,17 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/account"
-	"github.com/iotexproject/iotex-core/action/protocol/rewarding"
-	"github.com/iotexproject/iotex-core/blockchain"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/state"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/testutil"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/account"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rewarding"
+	"github.com/iotexproject/iotex-core/v2/blockchain"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/pkg/unit"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/testutil"
 )
 
 type (
@@ -47,23 +47,6 @@ func (s *testString) Deserialize(v []byte) error {
 	return nil
 }
 
-func newFactoryWorkingSet(t testing.TB) *workingSet {
-	r := require.New(t)
-	sf, err := NewFactory(DefaultConfig, db.NewMemKVStore())
-	r.NoError(err)
-
-	ctx := genesis.WithGenesisContext(
-		protocol.WithRegistry(context.Background(), protocol.NewRegistry()),
-		genesis.Default,
-	)
-	r.NoError(sf.Start(ctx))
-	// defer r.NoError(sf.Stop(ctx))
-
-	ws, err := sf.(workingSetCreator).newWorkingSet(ctx, 1)
-	r.NoError(err)
-	return ws
-}
-
 func newStateDBWorkingSet(t testing.TB) *workingSet {
 	r := require.New(t)
 	sf, err := NewStateDB(DefaultConfig, db.NewMemKVStore())
@@ -71,7 +54,7 @@ func newStateDBWorkingSet(t testing.TB) *workingSet {
 
 	ctx := genesis.WithGenesisContext(
 		protocol.WithRegistry(context.Background(), protocol.NewRegistry()),
-		genesis.Default,
+		genesis.TestDefault(),
 	)
 	r.NoError(sf.Start(ctx))
 	// defer r.NoError(sf.Stop(ctx))
@@ -81,106 +64,59 @@ func newStateDBWorkingSet(t testing.TB) *workingSet {
 	return ws
 }
 
+type mockView string
+
+func (v mockView) Clone() protocol.View {
+	return v
+}
+
+func (v mockView) Snapshot() int {
+	return 0
+}
+
+func (v mockView) Revert(int) error {
+	return nil
+}
+
+func (v mockView) Commit(context.Context, protocol.StateReader) error {
+	return nil
+}
+
 func TestWorkingSet_ReadWriteView(t *testing.T) {
 	var (
 		r   = require.New(t)
 		set = []*workingSet{
-			newFactoryWorkingSet(t),
 			newStateDBWorkingSet(t),
 		}
-		tests = []struct{ key, val string }{
-			{"key1", "value1"},
-			{"key2", "value2"},
-			{"key3", "value3"},
-			{"key4", "value4"},
+		tests = map[string]mockView{
+			"key1": "value1",
+			"key2": "value2",
+			"key3": "value3",
+			"key4": "value4",
 		}
 	)
 	for _, ws := range set {
-		for _, test := range tests {
-			val, err := ws.ReadView(test.key)
+		for key, oval := range tests {
+			val, err := ws.ReadView(key)
 			r.Equal(protocol.ErrNoName, errors.Cause(err))
 			r.Equal(val, nil)
 			// write view into workingSet
-			r.NoError(ws.WriteView(test.key, test.val))
+			r.NoError(ws.WriteView(key, oval))
 		}
 
 		// read view and compare result
-		for _, test := range tests {
-			val, err := ws.ReadView(test.key)
+		for key, oval := range tests {
+			val, err := ws.ReadView(key)
 			r.NoError(err)
-			r.Equal(test.val, val)
+			r.Equal(oval, val)
 		}
 
 		// overwrite
-		newVal := "testvalue"
-		r.NoError(ws.WriteView(tests[0].key, newVal))
-		val, err := ws.ReadView(tests[0].key)
+		var newVal mockView = "testvalue"
+		r.NoError(ws.WriteView("key1", newVal))
+		val, err := ws.ReadView("key1")
 		r.NoError(err)
 		r.Equal(newVal, val)
-	}
-}
-
-func TestWorkingSet_Dock(t *testing.T) {
-	var (
-		r   = require.New(t)
-		set = []*workingSet{
-			newFactoryWorkingSet(t),
-			newStateDBWorkingSet(t),
-		}
-		tests = []struct {
-			name, key string
-			val       state.Serializer
-		}{
-			{
-				"ns", "test1", &testString{"v1"},
-			},
-			{
-				"ns", "test2", &testString{"v2"},
-			},
-			{
-				"vs", "test3", &testString{"v3"},
-			},
-			{
-				"ts", "test4", &testString{"v4"},
-			},
-		}
-	)
-	for _, ws := range set {
-		// test empty dock
-		ts := &testString{}
-		for _, e := range tests {
-			r.False(ws.ProtocolDirty(e.name))
-			r.Equal(protocol.ErrNoName, ws.Unload(e.name, e.key, ts))
-		}
-
-		// populate the dock, and verify existence
-		for _, e := range tests {
-			r.NoError(ws.Load(e.name, e.key, e.val))
-			r.True(ws.ProtocolDirty(e.name))
-			r.NoError(ws.Unload(e.name, e.key, ts))
-			r.Equal(e.val, ts)
-			// test key that does not exist
-			r.Equal(protocol.ErrNoName, ws.Unload(e.name, "notexist", ts))
-		}
-
-		// overwrite
-		v5 := &testString{"v5"}
-		r.NoError(ws.Load(tests[1].name, tests[1].key, v5))
-		r.NoError(ws.Unload(tests[1].name, tests[1].key, ts))
-		r.Equal(v5, ts)
-
-		// add a new one
-		v6 := &testString{"v6"}
-		r.NoError(ws.Load("as", "test6", v6))
-		r.True(ws.ProtocolDirty("as"))
-		r.NoError(ws.Unload("as", "test6", ts))
-		r.Equal(v6, ts)
-
-		ws.Reset()
-		for _, e := range tests {
-			r.False(ws.ProtocolDirty(e.name))
-		}
-		r.False(ws.ProtocolDirty("as"))
 	}
 }
 
@@ -194,9 +130,8 @@ func TestWorkingSet_ValidateBlock(t *testing.T) {
 	}
 	cfg.Genesis.InitBalanceMap[identityset.Address(28).String()] = "100000000"
 	var (
-		f1, _          = NewFactory(cfg, db.NewMemKVStore(), RegistryOption(registry))
 		f2, _          = NewStateDB(cfg, db.NewMemKVStore(), RegistryStateDBOption(registry))
-		factories      = []Factory{f1, f2}
+		factories      = []Factory{f2}
 		digestHash, _  = hash.HexStringToHash256("43f69c954ea0138917d69a01f7ba47da74c99cb2c6229f5969a7f0bf53efb775")
 		receiptRoot, _ = hash.HexStringToHash256("b8aaff4d845664a7a3f341f677365dafcdae0ae99a7fea821c7cc42c320acefe")
 		tests          = []struct {
@@ -226,10 +161,8 @@ func TestWorkingSet_ValidateBlock(t *testing.T) {
 		genesis.WithGenesisContext(context.Background(), cfg.Genesis),
 		protocol.BlockCtx{},
 	)
-	require.NoError(f1.Start(ctx))
 	require.NoError(f2.Start(ctx))
 	defer func() {
-		require.NoError(f1.Stop(ctx))
 		require.NoError(f2.Stop(ctx))
 	}()
 
@@ -256,25 +189,23 @@ func TestWorkingSet_ValidateBlock_SystemAction(t *testing.T) {
 		Chain:   blockchain.DefaultConfig,
 		Genesis: genesis.TestDefault(),
 	}
-	cfg.Genesis.QuebecBlockHeight = 1 // enable validate system action
+	cfg.Genesis.VanuatuBlockHeight = 1 // enable validate system action
+	testutil.NormalizeGenesisHeights(&cfg.Genesis.Blockchain)
 	cfg.Genesis.InitBalanceMap[identityset.Address(28).String()] = "100000000"
 	registry := protocol.NewRegistry()
 	require.NoError(account.NewProtocol(rewarding.DepositGas).Register(registry))
 	require.NoError(rewarding.NewProtocol(cfg.Genesis.Rewarding).Register(registry))
 	var (
-		f1, _     = NewFactory(cfg, db.NewMemKVStore(), RegistryOption(registry))
 		f2, _     = NewStateDB(cfg, db.NewMemKVStore(), RegistryStateDBOption(registry))
-		factories = []Factory{f1, f2}
+		factories = []Factory{f2}
 	)
 
 	ctx := protocol.WithBlockCtx(
 		genesis.WithGenesisContext(context.Background(), cfg.Genesis),
 		protocol.BlockCtx{},
 	)
-	require.NoError(f1.Start(ctx))
 	require.NoError(f2.Start(ctx))
 	defer func() {
-		require.NoError(f1.Stop(ctx))
 		require.NoError(f2.Stop(ctx))
 	}()
 
@@ -292,7 +223,7 @@ func TestWorkingSet_ValidateBlock_SystemAction(t *testing.T) {
 		require.NoError(err)
 		receiptRoot, err := hash.HexStringToHash256("f04673451e31386a8fddfcf7750665bfcf33f239f6c4919430bb11a144e1aa95")
 		require.NoError(err)
-		actions := []*action.SealedEnvelope{makeTransferAction(t, 1)}
+		actions := []*action.SealedEnvelope{makeTransferAction(t, 0)}
 		for _, f := range factories {
 			block := makeBlock(t, hash.ZeroHash256, receiptRoot, digestHash, actions...)
 			require.ErrorIs(f.Validate(zctx, block), errInvalidSystemActionLayout)
@@ -303,18 +234,18 @@ func TestWorkingSet_ValidateBlock_SystemAction(t *testing.T) {
 		require.NoError(err)
 		receiptRoot, err := hash.HexStringToHash256("f04673451e31386a8fddfcf7750665bfcf33f239f6c4919430bb11a144e1aa95")
 		require.NoError(err)
-		actions := []*action.SealedEnvelope{makeRewardAction(t, 28), makeTransferAction(t, 1)}
+		actions := []*action.SealedEnvelope{makeRewardAction(t, 28), makeTransferAction(t, 0)}
 		for _, f := range factories {
 			block := makeBlock(t, hash.ZeroHash256, receiptRoot, digestHash, actions...)
 			require.ErrorIs(f.Validate(zctx, block), errInvalidSystemActionLayout)
 		}
 	})
 	t.Run("correct system action", func(t *testing.T) {
-		digestHash, err := hash.HexStringToHash256("ade24a5c647b5af34c4e74fe0d8f1fa410f6fb115f8fc2d39e45ca2f895de9ca")
+		digestHash, err := hash.HexStringToHash256("da051302d6e0b433d54225892789ce24dd634b1c17a6fa443a8a8cab27e2c586")
 		require.NoError(err)
-		receiptRoot, err := hash.HexStringToHash256("a59bd06fe4d2bb537895f170dec1f9213045cb13480e4941f1abdc8d13b16fae")
+		receiptRoot, err := hash.HexStringToHash256("afd544c5cf1b4b88216504a3b08d535314470adf6e45c68f9d0bb9e5c3699948")
 		require.NoError(err)
-		actions := []*action.SealedEnvelope{makeTransferAction(t, 1), makeRewardAction(t, 28)}
+		actions := []*action.SealedEnvelope{makeTransferAction(t, 0), makeRewardAction(t, 28)}
 		for _, f := range factories {
 			block := makeBlock(t, hash.ZeroHash256, receiptRoot, digestHash, actions...)
 			require.ErrorIs(f.Validate(zctx, block), nil)
@@ -325,7 +256,7 @@ func TestWorkingSet_ValidateBlock_SystemAction(t *testing.T) {
 		require.NoError(err)
 		receiptRoot, err := hash.HexStringToHash256("a59bd06fe4d2bb537895f170dec1f9213045cb13480e4941f1abdc8d13b16fae")
 		require.NoError(err)
-		actions := []*action.SealedEnvelope{makeTransferAction(t, 1), makeRewardAction(t, 27)}
+		actions := []*action.SealedEnvelope{makeTransferAction(t, 0), makeRewardAction(t, 27)}
 		for _, f := range factories {
 			block := makeBlock(t, hash.ZeroHash256, receiptRoot, digestHash, actions...)
 			require.ErrorContains(f.Validate(zctx, block), "Only producer could create reward")
@@ -336,7 +267,7 @@ func TestWorkingSet_ValidateBlock_SystemAction(t *testing.T) {
 		require.NoError(err)
 		receiptRoot, err := hash.HexStringToHash256("a59bd06fe4d2bb537895f170dec1f9213045cb13480e4941f1abdc8d13b16fae")
 		require.NoError(err)
-		actions := []*action.SealedEnvelope{makeTransferAction(t, 1), makeRewardAction(t, 28), makeRewardAction(t, 28)}
+		actions := []*action.SealedEnvelope{makeTransferAction(t, 0), makeRewardAction(t, 28), makeRewardAction(t, 28)}
 		for _, f := range factories {
 			block := makeBlock(t, hash.ZeroHash256, receiptRoot, digestHash, actions...)
 			require.ErrorIs(f.Validate(zctx, block), errInvalidSystemActionLayout)
@@ -349,7 +280,7 @@ func TestWorkingSet_ValidateBlock_SystemAction(t *testing.T) {
 		require.NoError(err)
 		rewardAct := makeRewardAction(t, 28)
 		rewardAct.SetNonce(2)
-		actions := []*action.SealedEnvelope{makeTransferAction(t, 1), rewardAct}
+		actions := []*action.SealedEnvelope{makeTransferAction(t, 0), rewardAct}
 		for _, f := range factories {
 			block := makeBlock(t, hash.ZeroHash256, receiptRoot, digestHash, actions...)
 			require.ErrorIs(f.Validate(zctx, block), errInvalidSystemActionLayout)
@@ -358,20 +289,10 @@ func TestWorkingSet_ValidateBlock_SystemAction(t *testing.T) {
 }
 
 func makeTransferAction(t *testing.T, nonce uint64) *action.SealedEnvelope {
-	tsf, err := action.NewTransfer(
-		uint64(nonce),
-		big.NewInt(1),
-		identityset.Address(29).String(),
-		nil,
-		testutil.TestGasLimit,
-		big.NewInt(0),
-	)
-	require.NoError(t, err)
-	eb := action.EnvelopeBuilder{}
-	evlp := eb.
+	tsf := action.NewTransfer(big.NewInt(1), identityset.Address(29).String(), nil)
+	evlp := (&action.EnvelopeBuilder{}).
 		SetAction(tsf).
-		SetGasLimit(tsf.GasLimit()).
-		SetGasPrice(tsf.GasPrice()).
+		SetGasLimit(testutil.TestGasLimit).
 		SetNonce(nonce).
 		SetChainID(1).
 		SetVersion(1).
@@ -382,14 +303,10 @@ func makeTransferAction(t *testing.T, nonce uint64) *action.SealedEnvelope {
 }
 
 func makeRewardAction(t *testing.T, signer int) *action.SealedEnvelope {
-	gb := action.GrantRewardBuilder{}
-	grant := gb.SetRewardType(action.BlockReward).SetHeight(1).Build()
+	grant := action.NewGrantReward(action.BlockReward, 1)
 	eb2 := action.EnvelopeBuilder{}
-	evlp := eb2.SetNonce(0).
-		SetGasPrice(big.NewInt(0)).
-		SetGasLimit(grant.GasLimit()).
-		SetAction(&grant).
-		Build()
+	evlp := eb2.SetNonce(0).SetGasPrice(big.NewInt(0)).
+		SetAction(grant).Build()
 	sevlp, err := action.Sign(evlp, identityset.PrivateKey(signer))
 	require.NoError(t, err)
 	return sevlp
@@ -405,6 +322,7 @@ func makeBlock(t *testing.T, prevHash hash.Hash256, receiptRoot hash.Hash256, di
 		SetReceiptRoot(receiptRoot).
 		SetDeltaStateDigest(digest).
 		SetPrevBlockHash(prevHash).
+		SetBaseFee(big.NewInt(unit.Qev)).
 		SignAndBuild(identityset.PrivateKey(0))
 	require.NoError(t, err)
 	return &blk

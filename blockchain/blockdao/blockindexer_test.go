@@ -18,12 +18,12 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/test/mock/mock_blockdao"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/test/mock/mock_blockdao"
 )
 
 func TestCheckIndexer(t *testing.T) {
@@ -67,6 +67,18 @@ func TestCheckIndexer(t *testing.T) {
 				return blk, err
 			}).AnyTimes()
 			mockDao.EXPECT().GetReceipts(gomock.Any()).Return(nil, nil).AnyTimes()
+			mockDao.EXPECT().HeaderByHeight(gomock.Any()).DoAndReturn(func(arg0 uint64) (*block.Header, error) {
+				pb := &iotextypes.BlockHeader{
+					Core: &iotextypes.BlockHeaderCore{
+						Height:    arg0,
+						Timestamp: timestamppb.Now(),
+					},
+					ProducerPubkey: identityset.PrivateKey(1).PublicKey().Bytes(),
+				}
+				blk := &block.Block{}
+				err := blk.LoadFromBlockHeaderProto(pb)
+				return &blk.Header, err
+			}).AnyTimes()
 			indexer.EXPECT().Height().Return(c.indexerTipHeight, nil).Times(1)
 			indexer.EXPECT().PutBlock(gomock.Any(), gomock.Any()).DoAndReturn(func(arg0 context.Context, arg1 *block.Block) error {
 				putBlocks = append(putBlocks, arg1)
@@ -74,7 +86,7 @@ func TestCheckIndexer(t *testing.T) {
 			}).AnyTimes()
 
 			ctx := protocol.WithBlockchainCtx(context.Background(), protocol.BlockchainCtx{})
-			ctx = genesis.WithGenesisContext(ctx, genesis.Default)
+			ctx = genesis.WithGenesisContext(ctx, genesis.TestDefault())
 			err := checker.CheckIndexer(ctx, indexer, 0, func(u uint64) {})
 			require.Equalf(c.noErr, err == nil, "error: %v", err)
 			require.Len(putBlocks, len(c.expectedPutBlocks))
@@ -126,6 +138,18 @@ func TestCheckIndexerWithStart(t *testing.T) {
 				err := blk.LoadFromBlockHeaderProto(pb)
 				return blk, err
 			}).AnyTimes()
+			mockDao.EXPECT().HeaderByHeight(gomock.Any()).DoAndReturn(func(arg0 uint64) (*block.Header, error) {
+				pb := &iotextypes.BlockHeader{
+					Core: &iotextypes.BlockHeaderCore{
+						Height:    arg0,
+						Timestamp: timestamppb.Now(),
+					},
+					ProducerPubkey: identityset.PrivateKey(1).PublicKey().Bytes(),
+				}
+				blk := &block.Block{}
+				err := blk.LoadFromBlockHeaderProto(pb)
+				return &blk.Header, err
+			}).AnyTimes()
 			mockDao.EXPECT().GetReceipts(gomock.Any()).Return(nil, nil).AnyTimes()
 			indexer.EXPECT().Height().Return(c.indexerTipHeight, nil).Times(1)
 			indexer.EXPECT().StartHeight().Return(c.indexerStartHeight).AnyTimes()
@@ -135,7 +159,7 @@ func TestCheckIndexerWithStart(t *testing.T) {
 			}).AnyTimes()
 
 			ctx := protocol.WithBlockchainCtx(context.Background(), protocol.BlockchainCtx{})
-			ctx = genesis.WithGenesisContext(ctx, genesis.Default)
+			ctx = genesis.WithGenesisContext(ctx, genesis.TestDefault())
 			err := checker.CheckIndexer(ctx, indexer, 0, func(u uint64) {})
 			require.Equalf(c.noErr, err == nil, "error: %v", err)
 			require.Len(putBlocks, len(c.expectedPutBlocks))

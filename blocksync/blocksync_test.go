@@ -12,32 +12,32 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/iotexproject/go-pkgs/hash"
-	"github.com/libp2p/go-libp2p-core/peer"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/account"
-	accountutil "github.com/iotexproject/iotex-core/action/protocol/account/util"
-	"github.com/iotexproject/iotex-core/action/protocol/rewarding"
-	"github.com/iotexproject/iotex-core/action/protocol/rolldpos"
-	"github.com/iotexproject/iotex-core/actpool"
-	"github.com/iotexproject/iotex-core/blockchain"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/blockdao"
-	"github.com/iotexproject/iotex-core/blockchain/filedao"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/consensus"
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/state/factory"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/test/mock/mock_blockchain"
-	"github.com/iotexproject/iotex-core/test/mock/mock_blockdao"
-	"github.com/iotexproject/iotex-core/test/mock/mock_blocksync"
-	"github.com/iotexproject/iotex-core/test/mock/mock_consensus"
-	"github.com/iotexproject/iotex-core/testutil"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/account"
+	accountutil "github.com/iotexproject/iotex-core/v2/action/protocol/account/util"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rewarding"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rolldpos"
+	"github.com/iotexproject/iotex-core/v2/actpool"
+	"github.com/iotexproject/iotex-core/v2/blockchain"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/blockdao"
+	"github.com/iotexproject/iotex-core/v2/blockchain/filedao"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/consensus"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/state/factory"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/test/mock/mock_blockchain"
+	"github.com/iotexproject/iotex-core/v2/test/mock/mock_blockdao"
+	"github.com/iotexproject/iotex-core/v2/test/mock/mock_blocksync"
+	"github.com/iotexproject/iotex-core/v2/test/mock/mock_consensus"
+	"github.com/iotexproject/iotex-core/v2/testutil"
 )
 
 type testConfig struct {
@@ -195,7 +195,7 @@ func TestBlockSyncerProcessBlockTipHeight(t *testing.T) {
 	rp := rolldpos.NewProtocol(cfg.Genesis.NumCandidateDelegates, cfg.Genesis.NumDelegates, cfg.Genesis.NumSubEpochs)
 	require.NoError(rp.Register(registry))
 	factoryCfg := factory.GenerateConfig(cfg.Chain, cfg.Genesis)
-	sf, err := factory.NewFactory(factoryCfg, db.NewMemKVStore(), factory.RegistryOption(registry))
+	sf, err := factory.NewStateDB(factoryCfg, db.NewMemKVStore(), factory.RegistryStateDBOption(registry))
 	require.NoError(err)
 	ap, err := actpool.NewActPool(cfg.Genesis, sf, cfg.ActPool)
 	require.NotNil(ap)
@@ -261,7 +261,7 @@ func TestBlockSyncerProcessBlockOutOfOrder(t *testing.T) {
 	rp := rolldpos.NewProtocol(cfg.Genesis.NumCandidateDelegates, cfg.Genesis.NumDelegates, cfg.Genesis.NumSubEpochs)
 	require.NoError(rp.Register(registry))
 	factoryCfg := factory.GenerateConfig(cfg.Chain, cfg.Genesis)
-	sf, err := factory.NewFactory(factoryCfg, db.NewMemKVStore(), factory.RegistryOption(registry))
+	sf, err := factory.NewStateDB(factoryCfg, db.NewMemKVStore(), factory.RegistryStateDBOption(registry))
 	require.NoError(err)
 	ap1, err := actpool.NewActPool(cfg.Genesis, sf, cfg.ActPool)
 	require.NotNil(ap1)
@@ -288,7 +288,7 @@ func TestBlockSyncerProcessBlockOutOfOrder(t *testing.T) {
 	registry2 := protocol.NewRegistry()
 	require.NoError(acc.Register(registry2))
 	require.NoError(rp.Register(registry2))
-	sf2, err := factory.NewFactory(factoryCfg, db.NewMemKVStore(), factory.RegistryOption(registry2))
+	sf2, err := factory.NewStateDB(factoryCfg, db.NewMemKVStore(), factory.RegistryStateDBOption(registry2))
 	require.NoError(err)
 	ap2, err := actpool.NewActPool(cfg.Genesis, sf2, cfg.ActPool)
 	require.NotNil(ap2)
@@ -363,7 +363,7 @@ func TestBlockSyncerProcessBlock(t *testing.T) {
 	)
 	require.NoError(rolldposProtocol.Register(registry))
 	factoryCfg := factory.GenerateConfig(cfg.Chain, cfg.Genesis)
-	sf, err := factory.NewFactory(factoryCfg, db.NewMemKVStore(), factory.RegistryOption(registry))
+	sf, err := factory.NewStateDB(factoryCfg, db.NewMemKVStore(), factory.RegistryStateDBOption(registry))
 	require.NoError(err)
 	ap1, err := actpool.NewActPool(cfg.Genesis, sf, cfg.ActPool)
 	require.NotNil(ap1)
@@ -389,7 +389,7 @@ func TestBlockSyncerProcessBlock(t *testing.T) {
 	registry2 := protocol.NewRegistry()
 	require.NoError(acc.Register(registry2))
 	require.NoError(rolldposProtocol.Register(registry2))
-	sf2, err := factory.NewFactory(factoryCfg, db.NewMemKVStore(), factory.RegistryOption(registry2))
+	sf2, err := factory.NewStateDB(factoryCfg, db.NewMemKVStore(), factory.RegistryStateDBOption(registry2))
 	require.NoError(err)
 	ap2, err := actpool.NewActPool(cfg.Genesis, sf2, cfg.ActPool)
 	require.NotNil(ap2)
@@ -457,7 +457,7 @@ func TestBlockSyncerSync(t *testing.T) {
 	rp := rolldpos.NewProtocol(cfg.Genesis.NumCandidateDelegates, cfg.Genesis.NumDelegates, cfg.Genesis.NumSubEpochs)
 	require.NoError(rp.Register(registry))
 	factoryCfg := factory.GenerateConfig(cfg.Chain, cfg.Genesis)
-	sf, err := factory.NewFactory(factoryCfg, db.NewMemKVStore(), factory.RegistryOption(registry))
+	sf, err := factory.NewStateDB(factoryCfg, db.NewMemKVStore(), factory.RegistryStateDBOption(registry))
 	require.NoError(err)
 	ap, err := actpool.NewActPool(cfg.Genesis, sf, cfg.ActPool)
 	require.NotNil(ap)
@@ -523,7 +523,7 @@ func newTestConfig() (testConfig, error) {
 
 	cfg := testConfig{
 		BlockSync: DefaultConfig,
-		Genesis:   genesis.Default,
+		Genesis:   genesis.TestDefault(),
 		Chain:     blockchain.DefaultConfig,
 		ActPool:   actpool.DefaultConfig,
 	}

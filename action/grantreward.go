@@ -6,12 +6,18 @@
 package action
 
 import (
-	"math/big"
+	"strings"
 
+	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/iotexproject/iotex-core/pkg/util/byteutil"
-	"github.com/iotexproject/iotex-proto/golang/iotextypes"
+	"github.com/iotexproject/iotex-core/v2/pkg/util/byteutil"
+)
+
+var (
+	_grantRewardMethod abi.Method
+	_                  EthCompatibleAction = (*GrantReward)(nil)
 )
 
 const (
@@ -19,14 +25,53 @@ const (
 	BlockReward = iota
 	// EpochReward indicates that the action is to grant epoch reward
 	EpochReward
+
+	_grantrewardInterfaceABI = `[
+		{
+			"inputs": [
+				{
+					"internalType": "int8",
+					"name": "rewardType",
+					"type": "int8"
+				},
+				{
+					"internalType": "uint64",
+					"name": "height",
+					"type": "uint64"
+				}
+			],
+			"name": "grantReward",
+			"outputs": [],
+			"stateMutability": "nonpayable",
+			"type": "function"
+		}
+	]`
 )
+
+func init() {
+	grantRewardInterface, err := abi.JSON(strings.NewReader(_grantrewardInterfaceABI))
+	if err != nil {
+		panic(err)
+	}
+	var ok bool
+	_grantRewardMethod, ok = grantRewardInterface.Methods["grantReward"]
+	if !ok {
+		panic("fail to load the method")
+	}
+}
 
 // GrantReward is the action to grant either block or epoch reward
 type GrantReward struct {
-	AbstractAction
-
+	reward_common
 	rewardType int
 	height     uint64
+}
+
+func NewGrantReward(rewardType int, height uint64) *GrantReward {
+	return &GrantReward{
+		rewardType: rewardType,
+		height:     height,
+	}
 }
 
 // RewardType returns the grant reward type
@@ -38,6 +83,10 @@ func (g *GrantReward) Height() uint64 { return g.height }
 // Serialize returns a raw byte stream of a grant reward action
 func (g *GrantReward) Serialize() []byte {
 	return byteutil.Must(proto.Marshal(g.Proto()))
+}
+
+func (act *GrantReward) FillAction(core *iotextypes.ActionCore) {
+	core.Action = &iotextypes.ActionCore_GrantReward{GrantReward: act.Proto()}
 }
 
 // Proto converts a grant reward action struct to a grant reward action protobuf
@@ -73,31 +122,16 @@ func (*GrantReward) IntrinsicGas() (uint64, error) {
 	return 0, nil
 }
 
-// Cost returns the total cost of a grant reward action
-func (*GrantReward) Cost() (*big.Int, error) {
-	return big.NewInt(0), nil
-}
+func (*GrantReward) SanityCheck() error { return nil }
 
-// GrantRewardBuilder is the struct to build GrantReward
-type GrantRewardBuilder struct {
-	Builder
-	grantReward GrantReward
-}
-
-// SetRewardType sets the grant reward type
-func (b *GrantRewardBuilder) SetRewardType(t int) *GrantRewardBuilder {
-	b.grantReward.rewardType = t
-	return b
-}
-
-// SetHeight sets the grant reward block height
-func (b *GrantRewardBuilder) SetHeight(height uint64) *GrantRewardBuilder {
-	b.grantReward.height = height
-	return b
-}
-
-// Build builds a new grant reward action
-func (b *GrantRewardBuilder) Build() GrantReward {
-	b.grantReward.AbstractAction = b.Builder.Build()
-	return b.grantReward
+// EthData returns the ABI-encoded data for converting to eth tx
+func (g *GrantReward) EthData() ([]byte, error) {
+	data, err := _grantRewardMethod.Inputs.Pack(
+		int8(g.rewardType),
+		g.height,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return append(_grantRewardMethod.ID, data...), nil
 }

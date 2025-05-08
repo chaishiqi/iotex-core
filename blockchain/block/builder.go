@@ -1,4 +1,4 @@
-// Copyright (c) 2019 IoTeX Foundation
+// Copyright (c) 2024 IoTeX Foundation
 // This source code is provided 'as is' and no warranties are given as to title or non-infringement, merchantability
 // or fitness for purpose and, to the extent permitted by law, all liability for your use of the code is disclaimed.
 // This source code is governed by Apache License 2.0 that can be found in the LICENSE file.
@@ -6,6 +6,7 @@
 package block
 
 import (
+	"math/big"
 	"time"
 
 	"github.com/iotexproject/go-pkgs/bloom"
@@ -13,8 +14,8 @@ import (
 	"github.com/iotexproject/go-pkgs/hash"
 	"github.com/pkg/errors"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/pkg/version"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/pkg/version"
 )
 
 // Builder is used to construct Block.
@@ -80,6 +81,30 @@ func (b *Builder) SetReceiptRoot(h hash.Hash256) *Builder {
 // SetLogsBloom sets the logs bloom filter value after running actions included in this building block.
 func (b *Builder) SetLogsBloom(f bloom.BloomFilter) *Builder {
 	b.blk.Header.logsBloom = f
+	return b
+}
+
+// SetGasUsed sets the used gas
+func (b *Builder) SetGasUsed(g uint64) *Builder {
+	b.blk.Header.gasUsed = g
+	return b
+}
+
+// SetBaseFee sets the base fee
+func (b *Builder) SetBaseFee(fee *big.Int) *Builder {
+	b.blk.Header.baseFee = new(big.Int).Set(fee)
+	return b
+}
+
+// SetBlobGasUsed sets the blob gas used
+func (b *Builder) SetBlobGasUsed(g uint64) *Builder {
+	b.blk.Header.blobGasUsed = g
+	return b
+}
+
+// SetExcessBlobGas sets the excess blob gas
+func (b *Builder) SetExcessBlobGas(g uint64) *Builder {
+	b.blk.Header.excessBlobGas = g
 	return b
 }
 

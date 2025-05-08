@@ -13,17 +13,18 @@ import (
 	"time"
 
 	"github.com/iotexproject/iotex-proto/golang/iotexrpc"
-	"github.com/libp2p/go-libp2p-core/peer"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/pkg/fastrand"
-	"github.com/iotexproject/iotex-core/pkg/lifecycle"
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/pkg/routine"
-	"github.com/iotexproject/iotex-core/server/itx/nodestats"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/blockdao"
+	"github.com/iotexproject/iotex-core/v2/pkg/fastrand"
+	"github.com/iotexproject/iotex-core/v2/pkg/lifecycle"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/pkg/routine"
+	"github.com/iotexproject/iotex-core/v2/server/itx/nodestats"
 )
 
 type (
@@ -163,11 +164,15 @@ func (bs *blockSyncer) commitBlocks(blks []*peerBlock) bool {
 			continue
 		}
 		err := bs.commitBlockHandler(blk.block)
-		if err == nil {
+		switch errors.Cause(err) {
+		case nil:
 			return true
+		case blockdao.ErrRemoteHeightTooLow:
+			log.L().Info("remote height too low", zap.Uint64("height", blk.block.Height()))
+		default:
+			bs.blockP2pPeer(blk.pid)
+			log.L().Error("failed to commit block", zap.Error(err), zap.Uint64("height", blk.block.Height()), zap.String("peer", blk.pid))
 		}
-		bs.blockP2pPeer(blk.pid)
-		log.L().Error("failed to commit block", zap.Error(err), zap.Uint64("height", blk.block.Height()), zap.String("peer", blk.pid))
 	}
 	return false
 }
@@ -222,7 +227,7 @@ func (bs *blockSyncer) requestBlock(ctx context.Context, start uint64, end uint6
 			peer,
 			&iotexrpc.BlockSync{Start: start, End: end},
 		); err != nil {
-			log.L().Error("failed to request blocks", zap.Error(err), zap.String("peer", peer.ID.Pretty()), zap.Uint64("start", start), zap.Uint64("end", end))
+			log.L().Error("failed to request blocks", zap.Error(err), zap.String("peer", peer.ID.String()), zap.Uint64("start", start), zap.Uint64("end", end))
 		}
 	}
 }
@@ -285,7 +290,6 @@ func (bs *blockSyncer) ProcessBlock(ctx context.Context, peer string, blk *block
 		}
 		syncedHeight++
 	}
-	bs.buf.Cleanup(syncedHeight)
 	log.L().Debug("flush blocks", zap.Uint64("start", tip), zap.Uint64("end", syncedHeight))
 	if syncedHeight > bs.lastTip {
 		bs.lastTip = syncedHeight

@@ -18,25 +18,25 @@ import (
 	"github.com/iotexproject/iotex-address/address"
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/account"
-	"github.com/iotexproject/iotex-core/action/protocol/poll"
-	"github.com/iotexproject/iotex-core/action/protocol/rolldpos"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/db/batch"
-	"github.com/iotexproject/iotex-core/pkg/unit"
-	"github.com/iotexproject/iotex-core/state"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/test/mock/mock_chainmanager"
-	"github.com/iotexproject/iotex-core/test/mock/mock_poll"
-	"github.com/iotexproject/iotex-core/testutil/testdb"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/account"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/poll"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rolldpos"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/db/batch"
+	"github.com/iotexproject/iotex-core/v2/pkg/unit"
+	"github.com/iotexproject/iotex-core/v2/state"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/test/mock/mock_chainmanager"
+	"github.com/iotexproject/iotex-core/v2/test/mock/mock_poll"
+	"github.com/iotexproject/iotex-core/v2/testutil/testdb"
 )
 
 func TestValidateExtension(t *testing.T) {
 	r := require.New(t)
 
-	g := genesis.Default.Rewarding
+	g := genesis.TestDefault().Rewarding
 	r.NoError(validateFoundationBonusExtension(g))
 
 	last := g.FoundationBonusP2StartEpoch
@@ -56,7 +56,7 @@ func testProtocol(t *testing.T, test func(*testing.T, context.Context, protocol.
 	registry := protocol.NewRegistry()
 	sm := testdb.NewMockStateManager(ctrl)
 
-	g := genesis.Default
+	g := genesis.TestDefault()
 	// Create a test account with 1000 token
 	g.InitBalanceMap[identityset.Address(28).String()] = "1000"
 	g.Rewarding.InitBalanceStr = "0"
@@ -173,7 +173,7 @@ func testProtocol(t *testing.T, test func(*testing.T, context.Context, protocol.
 	ctx = protocol.WithBlockCtx(
 		ctx, protocol.BlockCtx{
 			Producer:    identityset.Address(27),
-			BlockHeight: genesis.Default.NumDelegates * genesis.Default.NumSubEpochs,
+			BlockHeight: g.NumDelegates * g.NumSubEpochs,
 		},
 	)
 	ctx = protocol.WithActionCtx(
@@ -218,15 +218,15 @@ func testProtocol(t *testing.T, test func(*testing.T, context.Context, protocol.
 }
 
 func TestProtocol_Validate(t *testing.T) {
-	g := genesis.Default
+	g := genesis.TestDefault()
 	g.NewfoundlandBlockHeight = 0
 	p := NewProtocol(g.Rewarding)
-	act := createGrantRewardAction(0, uint64(0)).Action()
+	act := createGrantRewardAction(0, uint64(0))
 	ctx := protocol.WithBlockCtx(
 		context.Background(),
 		protocol.BlockCtx{
 			Producer:    identityset.Address(0),
-			BlockHeight: genesis.Default.NumDelegates * genesis.Default.NumSubEpochs,
+			BlockHeight: g.NumDelegates * g.NumSubEpochs,
 		},
 	)
 	ctx = genesis.WithGenesisContext(
@@ -272,7 +272,7 @@ func TestProtocol_Validate(t *testing.T) {
 func TestProtocol_Handle(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	g := genesis.Default
+	g := genesis.TestDefault()
 	registry := protocol.NewRegistry()
 	sm := mock_chainmanager.NewMockStateManager(ctrl)
 	cb := batch.NewCachedBatch()
@@ -345,7 +345,7 @@ func TestProtocol_Handle(t *testing.T) {
 			BlockHeight: 0,
 		},
 	)
-
+	ctx = protocol.WithBlockchainCtx(ctx, protocol.BlockchainCtx{Tip: protocol.TipInfo{}})
 	ctx = genesis.WithGenesisContext(protocol.WithRegistry(ctx, registry), g)
 	ctx = protocol.WithFeatureCtx(ctx)
 	ap := account.NewProtocol(DepositGas)
@@ -357,7 +357,7 @@ func TestProtocol_Handle(t *testing.T) {
 		ctx,
 		protocol.BlockCtx{
 			Producer:    identityset.Address(0),
-			BlockHeight: genesis.Default.NumDelegates * genesis.Default.NumSubEpochs,
+			BlockHeight: g.NumDelegates * g.NumSubEpochs,
 		},
 	)
 	ctx = protocol.WithActionCtx(
@@ -370,18 +370,9 @@ func TestProtocol_Handle(t *testing.T) {
 	)
 
 	// Deposit
-	db := action.DepositToRewardingFundBuilder{}
-	deposit := db.SetAmount(big.NewInt(1000000)).Build()
-	eb1 := action.EnvelopeBuilder{}
-	e1 := eb1.SetNonce(1).
-		SetGasPrice(big.NewInt(0)).
-		SetGasLimit(deposit.GasLimit()).
-		SetAction(&deposit).
-		Build()
-	se1, err := action.Sign(e1, identityset.PrivateKey(0))
-	require.NoError(t, err)
-
-	_, err = p.Handle(ctx, se1.Action(), sm)
+	deposit := action.NewDepositToRewardingFund(big.NewInt(1000000), nil)
+	e1 := (&action.EnvelopeBuilder{}).SetNonce(1).SetAction(deposit).Build()
+	_, err = p.Handle(ctx, e1, sm)
 	require.NoError(t, err)
 	balance, _, err := p.TotalBalance(ctx, sm)
 	require.NoError(t, err)
@@ -390,8 +381,6 @@ func TestProtocol_Handle(t *testing.T) {
 	// Grant
 	// Test for createGrantRewardAction
 	e2 := createGrantRewardAction(0, uint64(0))
-	se2, err := action.Sign(e2, identityset.PrivateKey(0))
-	require.NoError(t, err)
 	ctx = protocol.WithActionCtx(
 		ctx,
 		protocol.ActionCtx{
@@ -400,7 +389,7 @@ func TestProtocol_Handle(t *testing.T) {
 			Nonce:    0,
 		},
 	)
-	receipt, err := p.Handle(ctx, se2.Action(), sm)
+	receipt, err := p.Handle(ctx, e2, sm)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(iotextypes.ReceiptStatus_Success), receipt.Status)
 	assert.Equal(t, 1, len(receipt.Logs()))
@@ -413,21 +402,13 @@ func TestProtocol_Handle(t *testing.T) {
 		},
 	)
 	// Grant the block reward again should fail
-	receipt, err = p.Handle(ctx, se2.Action(), sm)
+	receipt, err = p.Handle(ctx, e2, sm)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(iotextypes.ReceiptStatus_Failure), receipt.Status)
 
 	// Claim
-	claimBuilder := action.ClaimFromRewardingFundBuilder{}
-	claim := claimBuilder.SetAmount(big.NewInt(1000000)).Build()
-	eb3 := action.EnvelopeBuilder{}
-	e3 := eb3.SetNonce(4).
-		SetGasPrice(big.NewInt(0)).
-		SetGasLimit(claim.GasLimit()).
-		SetAction(&claim).
-		Build()
-	se3, err := action.Sign(e3, identityset.PrivateKey(0))
-	require.NoError(t, err)
+	claim := action.NewClaimFromRewardingFund(big.NewInt(1000000), nil, nil)
+	e3 := (&action.EnvelopeBuilder{}).SetNonce(4).SetAction(claim).Build()
 	ctx = protocol.WithActionCtx(
 		ctx,
 		protocol.ActionCtx{
@@ -436,7 +417,7 @@ func TestProtocol_Handle(t *testing.T) {
 			Nonce:    2,
 		},
 	)
-	_, err = p.Handle(ctx, se3.Action(), sm)
+	_, err = p.Handle(ctx, e3, sm)
 	require.NoError(t, err)
 	balance, _, err = p.TotalBalance(ctx, sm)
 	require.NoError(t, err)
@@ -525,7 +506,7 @@ func TestStateCheckLegacy(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	sm := testdb.NewMockStateManager(ctrl)
-	p := NewProtocol(genesis.Default.Rewarding)
+	p := NewProtocol(genesis.TestDefault().Rewarding)
 	chainCtx := genesis.WithGenesisContext(
 		context.Background(),
 		genesis.Genesis{
@@ -620,7 +601,7 @@ func TestMigrateValue(t *testing.T) {
 	e1 := exempt{
 		[]address.Address{identityset.Address(31)},
 	}
-	g := genesis.Default
+	g := genesis.TestDefault()
 
 	testProtocol(t, func(t *testing.T, ctx context.Context, sm protocol.StateManager, p *Protocol) {
 		// verify v1 state

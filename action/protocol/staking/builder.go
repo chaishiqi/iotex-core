@@ -1,6 +1,6 @@
 package staking
 
-import "github.com/iotexproject/iotex-core/blockchain/genesis"
+import "github.com/iotexproject/iotex-core/v2/blockchain/genesis"
 
 type (
 
@@ -8,6 +8,8 @@ type (
 	BuilderConfig struct {
 		Staking                  genesis.Staking
 		PersistStakingPatchBlock uint64
+		FixAliasForNonStopHeight uint64
 		StakingPatchDir          string
+		Revise                   ReviseConfig
 	}
 )

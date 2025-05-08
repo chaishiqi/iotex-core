@@ -3,6 +3,7 @@ package action
 import (
 	"encoding/hex"
 
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/iotexproject/go-pkgs/crypto"
 	"github.com/iotexproject/go-pkgs/hash"
 	"github.com/iotexproject/iotex-address/address"
@@ -11,8 +12,8 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/pkg/util/byteutil"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/pkg/util/byteutil"
 )
 
 // SealedEnvelope is a signed action envelope.
@@ -30,12 +31,22 @@ type SealedEnvelope struct {
 // an all-0 return value means the transaction is invalid
 func (sealed *SealedEnvelope) envelopeHash() (hash.Hash256, error) {
 	switch sealed.encoding {
-	case iotextypes.Encoding_ETHEREUM_EIP155, iotextypes.Encoding_ETHEREUM_UNPROTECTED:
-		act, ok := sealed.Action().(EthCompatibleAction)
+	case iotextypes.Encoding_TX_CONTAINER:
+		act, ok := sealed.Envelope.(*txContainer)
 		if !ok {
 			return hash.ZeroHash256, ErrInvalidAct
 		}
-		tx, err := act.ToEthTx(sealed.evmNetworkID)
+		encoding, err := act.typeToEncoding()
+		if err != nil {
+			return hash.ZeroHash256, err
+		}
+		signer, err := NewEthSigner(encoding, sealed.evmNetworkID)
+		if err != nil {
+			return hash.ZeroHash256, err
+		}
+		return rlpRawHash(act.tx, signer)
+	case iotextypes.Encoding_ETHEREUM_EIP155, iotextypes.Encoding_ETHEREUM_UNPROTECTED:
+		tx, err := sealed.ToEthTx()
 		if err != nil {
 			return hash.ZeroHash256, err
 		}
@@ -45,7 +56,7 @@ func (sealed *SealedEnvelope) envelopeHash() (hash.Hash256, error) {
 		}
 		return rlpRawHash(tx, signer)
 	case iotextypes.Encoding_IOTEX_PROTOBUF:
-		return hash.Hash256b(byteutil.Must(proto.Marshal(sealed.Envelope.Proto()))), nil
+		return hash.Hash256b(byteutil.Must(proto.Marshal(sealed.Envelope.ProtoForHash()))), nil
 	default:
 		return hash.ZeroHash256, errors.Errorf("unknown encoding type %v", sealed.encoding)
 	}
@@ -66,12 +77,14 @@ func (sealed *SealedEnvelope) Hash() (hash.Hash256, error) {
 
 func (sealed *SealedEnvelope) calcHash() (hash.Hash256, error) {
 	switch sealed.encoding {
-	case iotextypes.Encoding_ETHEREUM_EIP155, iotextypes.Encoding_ETHEREUM_UNPROTECTED:
-		act, ok := sealed.Action().(EthCompatibleAction)
+	case iotextypes.Encoding_TX_CONTAINER:
+		act, ok := sealed.Envelope.(*txContainer)
 		if !ok {
 			return hash.ZeroHash256, ErrInvalidAct
 		}
-		tx, err := act.ToEthTx(sealed.evmNetworkID)
+		return act.hash(), nil
+	case iotextypes.Encoding_ETHEREUM_EIP155, iotextypes.Encoding_ETHEREUM_UNPROTECTED:
+		tx, err := sealed.ToEthTx()
 		if err != nil {
 			return hash.ZeroHash256, err
 		}
@@ -81,7 +94,7 @@ func (sealed *SealedEnvelope) calcHash() (hash.Hash256, error) {
 		}
 		return rlpSignedHash(tx, signer, sealed.Signature())
 	case iotextypes.Encoding_IOTEX_PROTOBUF:
-		return hash.Hash256b(byteutil.Must(proto.Marshal(sealed.Proto()))), nil
+		return hash.Hash256b(byteutil.Must(proto.Marshal(sealed.protoForHash()))), nil
 	default:
 		return hash.ZeroHash256, errors.Errorf("unknown encoding type %v", sealed.encoding)
 	}
@@ -110,10 +123,24 @@ func (sealed *SealedEnvelope) Encoding() uint32 {
 	return uint32(sealed.encoding)
 }
 
+// ToEthTx converts to Ethereum tx
+func (sealed *SealedEnvelope) ToEthTx() (*types.Transaction, error) {
+	return sealed.Envelope.ToEthTx(sealed.evmNetworkID, sealed.encoding)
+}
+
 // Proto converts it to it's proto scheme.
 func (sealed *SealedEnvelope) Proto() *iotextypes.Action {
 	return &iotextypes.Action{
 		Core:         sealed.Envelope.Proto(),
+		SenderPubKey: sealed.srcPubkey.Bytes(),
+		Signature:    sealed.signature,
+		Encoding:     sealed.encoding,
+	}
+}
+
+func (sealed *SealedEnvelope) protoForHash() *iotextypes.Action {
+	return &iotextypes.Action{
+		Core:         sealed.Envelope.ProtoForHash(),
 		SenderPubKey: sealed.srcPubkey.Bytes(),
 		Signature:    sealed.signature,
 		Encoding:     sealed.encoding,
@@ -133,8 +160,8 @@ func (sealed *SealedEnvelope) loadProto(pbAct *iotextypes.Action, evmID uint32) 
 		return errors.Errorf("invalid signature length = %d, expecting 65", sigSize)
 	}
 
-	var elp Envelope = &envelope{}
-	if err := elp.LoadProto(pbAct.GetCore()); err != nil {
+	elp, err := protoToEnvelope(pbAct)
+	if err != nil {
 		return err
 	}
 	// populate pubkey and signature
@@ -144,13 +171,15 @@ func (sealed *SealedEnvelope) loadProto(pbAct *iotextypes.Action, evmID uint32) 
 	}
 	encoding := pbAct.GetEncoding()
 	switch encoding {
-	case iotextypes.Encoding_ETHEREUM_EIP155, iotextypes.Encoding_ETHEREUM_UNPROTECTED:
-		// verify action type can support RLP-encoding
-		act, ok := elp.Action().(EthCompatibleAction)
-		if !ok {
+	case iotextypes.Encoding_TX_CONTAINER:
+		// verify it is container format
+		if _, ok := elp.(TxContainer); !ok {
 			return ErrInvalidAct
 		}
-		tx, err := act.ToEthTx(evmID)
+		sealed.evmNetworkID = evmID
+	case iotextypes.Encoding_ETHEREUM_EIP155, iotextypes.Encoding_ETHEREUM_UNPROTECTED:
+		// verify action type can support RLP-encoding
+		tx, err := elp.ToEthTx(evmID, encoding)
 		if err != nil {
 			return err
 		}
@@ -179,6 +208,23 @@ func (sealed *SealedEnvelope) loadProto(pbAct *iotextypes.Action, evmID uint32) 
 	return nil
 }
 
+func protoToEnvelope(pbAct *iotextypes.Action) (Envelope, error) {
+	var (
+		elp = &envelope{}
+		cnt = &txContainer{}
+	)
+	if pbAct.GetEncoding() == iotextypes.Encoding_TX_CONTAINER {
+		if err := cnt.LoadProto(pbAct.GetCore()); err != nil {
+			return nil, err
+		}
+		return cnt, nil
+	}
+	if err := elp.LoadProto(pbAct.GetCore()); err != nil {
+		return nil, err
+	}
+	return elp, nil
+}
+
 // VerifySignature verifies the action using sender's public key
 func (sealed *SealedEnvelope) VerifySignature() error {
 	if sealed.SrcPubkey() == nil {
@@ -195,4 +241,14 @@ func (sealed *SealedEnvelope) VerifySignature() error {
 		return ErrInvalidSender
 	}
 	return nil
+}
+
+// Protected says whether the transaction is replay-protected.
+func (sealed *SealedEnvelope) Protected() bool {
+	switch sealed.encoding {
+	case iotextypes.Encoding_TX_CONTAINER:
+		return sealed.Envelope.(*txContainer).tx.Protected()
+	default:
+		return sealed.encoding != iotextypes.Encoding_ETHEREUM_UNPROTECTED
+	}
 }

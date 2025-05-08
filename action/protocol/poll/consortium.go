@@ -16,13 +16,13 @@ import (
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/execution/evm"
-	"github.com/iotexproject/iotex-core/action/protocol/rolldpos"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/state"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/execution/evm"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rolldpos"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/state"
 )
 
 var (
@@ -50,11 +50,11 @@ type consortiumCommittee struct {
 	bufferResult   state.CandidateList
 	indexer        *CandidateIndexer
 	addr           address.Address
-	getBlockHash   evm.GetBlockHash
 }
 
 // NewConsortiumCommittee creates a committee for consorium chain
-func NewConsortiumCommittee(indexer *CandidateIndexer, readContract ReadContract, getBlockHash evm.GetBlockHash) (Protocol, error) {
+// TODO: remove unused getBlockHash
+func NewConsortiumCommittee(indexer *CandidateIndexer, readContract ReadContract, _ evm.GetBlockHash) (Protocol, error) {
 	abi, err := abi.JSON(strings.NewReader(ConsortiumManagementABI))
 	if err != nil {
 		return nil, err
@@ -73,7 +73,6 @@ func NewConsortiumCommittee(indexer *CandidateIndexer, readContract ReadContract
 		abi:            abi,
 		addr:           addr,
 		indexer:        indexer,
-		getBlockHash:   getBlockHash,
 	}, nil
 }
 
@@ -101,17 +100,9 @@ func (cc *consortiumCommittee) CreateGenesisStates(ctx context.Context, sm proto
 	if err != nil {
 		return err
 	}
-	execution, err := action.NewExecution(
-		"",
-		_consortiumCommitteeContractNonce,
-		big.NewInt(0),
-		g.BlockGasLimitByHeight(0),
-		big.NewInt(0),
-		bytes,
-	)
-	if err != nil {
-		return err
-	}
+	execution := action.NewExecution("", big.NewInt(0), bytes)
+	elp := (&action.EnvelopeBuilder{}).SetGasLimit(g.BlockGasLimitByHeight(0)).
+		SetNonce(_consortiumCommitteeContractNonce).SetAction(execution).Build()
 	actionCtx := protocol.ActionCtx{}
 	actionCtx.Caller, err = address.FromString(_consortiumCommitteeContractCreator)
 	if err != nil {
@@ -119,8 +110,8 @@ func (cc *consortiumCommittee) CreateGenesisStates(ctx context.Context, sm proto
 	}
 	actionCtx.Nonce = _consortiumCommitteeContractNonce
 	actionCtx.ActionHash = _consortiumCommitteeContractHash
-	actionCtx.GasPrice = execution.GasPrice()
-	actionCtx.IntrinsicGas, err = execution.IntrinsicGas()
+	actionCtx.GasPrice = elp.GasPrice()
+	actionCtx.IntrinsicGas, err = elp.IntrinsicGas()
 	if err != nil {
 		return err
 	}
@@ -135,18 +126,13 @@ func (cc *consortiumCommittee) CreateGenesisStates(ctx context.Context, sm proto
 			return hash.ZeroHash256, nil
 		},
 		GetBlockTime: getBlockTime,
-		DepositGasFunc: func(context.Context, protocol.StateManager, address.Address, *big.Int, *big.Int) (*action.TransactionLog, error) {
+		DepositGasFunc: func(context.Context, protocol.StateManager, *big.Int, ...protocol.DepositOption) ([]*action.TransactionLog, error) {
 			return nil, nil
 		},
-		Sgd: nil,
 	})
 
 	// deploy consortiumCommittee contract
-	_, receipt, err := evm.ExecuteContract(
-		ctx,
-		sm,
-		execution,
-	)
+	_, receipt, err := evm.ExecuteContract(ctx, sm, elp)
 	if err != nil {
 		return err
 	}
@@ -156,7 +142,7 @@ func (cc *consortiumCommittee) CreateGenesisStates(ctx context.Context, sm proto
 	cc.contract = receipt.ContractAddress
 
 	ctx = evm.WithHelperCtx(ctx, evm.HelperContext{
-		GetBlockHash: cc.getBlockHash,
+		GetBlockHash: protocol.MustGetBlockchainCtx(ctx).GetBlockHash,
 		GetBlockTime: getBlockTime,
 	})
 	r := getContractReaderForGenesisStates(ctx, sm)
@@ -176,12 +162,12 @@ func (cc *consortiumCommittee) CreatePostSystemActions(ctx context.Context, sr p
 	return createPostSystemActions(ctx, sr, cc)
 }
 
-func (cc *consortiumCommittee) Handle(ctx context.Context, act action.Action, sm protocol.StateManager) (*action.Receipt, error) {
-	return handle(ctx, act, sm, cc.indexer, cc.addr.String())
+func (cc *consortiumCommittee) Handle(ctx context.Context, elp action.Envelope, sm protocol.StateManager) (*action.Receipt, error) {
+	return handle(ctx, elp.Action(), sm, cc.indexer, cc.addr.String())
 }
 
-func (cc *consortiumCommittee) Validate(ctx context.Context, act action.Action, sr protocol.StateReader) error {
-	return validate(ctx, sr, cc, act)
+func (cc *consortiumCommittee) Validate(ctx context.Context, elp action.Envelope, sr protocol.StateReader) error {
+	return validate(ctx, sr, cc, elp.Action())
 }
 
 func (cc *consortiumCommittee) ReadState(
@@ -294,18 +280,16 @@ func genContractReaderFromReadContract(r ReadContract, setting bool) contractRea
 func getContractReaderForGenesisStates(ctx context.Context, sm protocol.StateManager) contractReaderFunc {
 	return func(ctx context.Context, contract string, data []byte) ([]byte, error) {
 		gasLimit := uint64(10000000)
-		ex, err := action.NewExecution(contract, 1, big.NewInt(0), gasLimit, big.NewInt(0), data)
-		if err != nil {
-			return nil, err
-		}
+		ex := action.NewExecution(contract, big.NewInt(0), data)
 
 		addr, err := address.FromString(address.ZeroAddress)
 		if err != nil {
 			return nil, err
 		}
 
-		res, _, err := evm.SimulateExecution(ctx, sm, addr, ex)
-
+		elp := (&action.EnvelopeBuilder{}).SetNonce(1).SetGasLimit(gasLimit).
+			SetAction(ex).Build()
+		res, _, err := evm.SimulateExecution(ctx, sm, addr, elp)
 		return res, err
 	}
 }

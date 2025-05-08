@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/testutil"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/testutil"
 )
 
 func TestCandidatesBucketsIndexer_PutGetCandidates(t *testing.T) {
@@ -43,6 +43,7 @@ func TestCandidatesBucketsIndexer_PutGetCandidates(t *testing.T) {
 			OwnerAddress:       "owner1",
 			Name:               "abc",
 			SelfStakeBucketIdx: 123,
+			Id:                 "owner1",
 		},
 	}
 	cand2 := &iotextypes.CandidateListV2{
@@ -53,6 +54,7 @@ func TestCandidatesBucketsIndexer_PutGetCandidates(t *testing.T) {
 			OwnerAddress:       "owner2",
 			Name:               "xyz",
 			SelfStakeBucketIdx: 456,
+			Id:                 "owner2",
 		}),
 	}
 
@@ -126,6 +128,7 @@ func TestCandidatesBucketsIndexer_PutGetCandidates(t *testing.T) {
 			OwnerAddress:       "ownermax",
 			Name:               "alphabeta",
 			SelfStakeBucketIdx: 789,
+			Id:                 "ownermax",
 		}),
 	}
 	require.NoError(cbi.PutCandidates(height, candMax))

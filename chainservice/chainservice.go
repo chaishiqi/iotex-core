@@ -8,35 +8,37 @@ package chainservice
 import (
 	"context"
 
-	"github.com/libp2p/go-libp2p-core/peer"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/iotexproject/go-pkgs/hash"
 	"github.com/iotexproject/iotex-election/committee"
 	"github.com/iotexproject/iotex-proto/golang/iotexrpc"
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/poll"
-	"github.com/iotexproject/iotex-core/action/protocol/staking"
-	"github.com/iotexproject/iotex-core/actpool"
-	"github.com/iotexproject/iotex-core/api"
-	"github.com/iotexproject/iotex-core/blockchain"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/blockdao"
-	"github.com/iotexproject/iotex-core/blockindex"
-	"github.com/iotexproject/iotex-core/blockindex/contractstaking"
-	"github.com/iotexproject/iotex-core/blocksync"
-	"github.com/iotexproject/iotex-core/consensus"
-	"github.com/iotexproject/iotex-core/nodeinfo"
-	"github.com/iotexproject/iotex-core/p2p"
-	"github.com/iotexproject/iotex-core/pkg/lifecycle"
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/pkg/util/blockutil"
-	"github.com/iotexproject/iotex-core/server/itx/nodestats"
-	"github.com/iotexproject/iotex-core/state/factory"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/poll"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/staking"
+	"github.com/iotexproject/iotex-core/v2/actpool"
+	"github.com/iotexproject/iotex-core/v2/actsync"
+	"github.com/iotexproject/iotex-core/v2/api"
+	"github.com/iotexproject/iotex-core/v2/blockchain"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/blockdao"
+	"github.com/iotexproject/iotex-core/v2/blockindex"
+	"github.com/iotexproject/iotex-core/v2/blockindex/contractstaking"
+	"github.com/iotexproject/iotex-core/v2/blocksync"
+	"github.com/iotexproject/iotex-core/v2/consensus"
+	"github.com/iotexproject/iotex-core/v2/nodeinfo"
+	"github.com/iotexproject/iotex-core/v2/p2p"
+	"github.com/iotexproject/iotex-core/v2/pkg/lifecycle"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/server/itx/nodestats"
+	"github.com/iotexproject/iotex-core/v2/state/factory"
+	"github.com/iotexproject/iotex-core/v2/systemcontractindex/stakingindex"
 )
 
 var (
@@ -65,16 +67,18 @@ type ChainService struct {
 	p2pAgent          p2p.Agent
 	electionCommittee committee.Committee
 	// TODO: explorer dependency deleted at #1085, need to api related params
-	indexer                blockindex.Indexer
-	bfIndexer              blockindex.BloomFilterIndexer
-	candidateIndexer       *poll.CandidateIndexer
-	candBucketsIndexer     *staking.CandidatesBucketsIndexer
-	sgdIndexer             blockindex.SGDRegistry
-	contractStakingIndexer *contractstaking.Indexer
-	registry               *protocol.Registry
-	nodeInfoManager        *nodeinfo.InfoManager
-	apiStats               *nodestats.APILocalStats
-	blockTimeCalculator    *blockutil.BlockTimeCalculator
+	indexer                  blockindex.Indexer
+	bfIndexer                blockindex.BloomFilterIndexer
+	candidateIndexer         *poll.CandidateIndexer
+	candBucketsIndexer       *staking.CandidatesBucketsIndexer
+	contractStakingIndexer   *contractstaking.Indexer
+	contractStakingIndexerV2 stakingindex.StakingIndexer
+	contractStakingIndexerV3 stakingindex.StakingIndexer
+	registry                 *protocol.Registry
+	nodeInfoManager          *nodeinfo.InfoManager
+	apiStats                 *nodestats.APILocalStats
+	actionsync               *actsync.ActionSync
+	minter                   *factory.Minter
 }
 
 // Start starts the server
@@ -103,7 +107,37 @@ func (cs *ChainService) HandleAction(ctx context.Context, actPb *iotextypes.Acti
 	if err != nil {
 		log.L().Debug(err.Error())
 	}
-	return err
+	// TODO: only update action sync for blob action
+	hash, err := act.Hash()
+	if err != nil {
+		return err
+	}
+	cs.actionsync.ReceiveAction(ctx, hash)
+	return nil
+}
+
+// HandleActionHash handles incoming action hash request.
+func (cs *ChainService) HandleActionHash(ctx context.Context, actHash hash.Hash256, from string) error {
+	_, err := cs.actpool.GetActionByHash(actHash)
+	if err == nil { // action already in pool
+		return nil
+	}
+	if !errors.Is(err, action.ErrNotFound) {
+		return err
+	}
+	cs.actionsync.RequestAction(ctx, actHash)
+	return nil
+}
+
+func (cs *ChainService) HandleActionRequest(ctx context.Context, peer peer.AddrInfo, actHash hash.Hash256) error {
+	act, err := cs.actpool.GetActionByHash(actHash)
+	if err != nil {
+		if errors.Is(err, action.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	return cs.p2pAgent.UnicastOutbound(ctx, peer, act.Proto())
 }
 
 // HandleBlock handles incoming block request.
@@ -182,7 +216,7 @@ func (cs *ChainService) NodeInfoManager() *nodeinfo.InfoManager {
 func (cs *ChainService) Registry() *protocol.Registry { return cs.registry }
 
 // NewAPIServer creates a new api server
-func (cs *ChainService) NewAPIServer(cfg api.Config, plugins map[int]interface{}) (*api.ServerV2, error) {
+func (cs *ChainService) NewAPIServer(cfg api.Config, archive bool) (*api.ServerV2, error) {
 	if cfg.GRPCPort == 0 && cfg.HTTPPort == 0 {
 		return nil, nil
 	}
@@ -193,7 +227,9 @@ func (cs *ChainService) NewAPIServer(cfg api.Config, plugins map[int]interface{}
 		}),
 		api.WithNativeElection(cs.electionCommittee),
 		api.WithAPIStats(cs.apiStats),
-		api.WithSGDIndexer(cs.sgdIndexer),
+	}
+	if archive {
+		apiServerOptions = append(apiServerOptions, api.WithArchiveSupport())
 	}
 
 	svr, err := api.NewServerV2(
@@ -206,7 +242,7 @@ func (cs *ChainService) NewAPIServer(cfg api.Config, plugins map[int]interface{}
 		cs.bfIndexer,
 		cs.actpool,
 		cs.registry,
-		cs.blockTimeCalculator.CalculateBlockTime,
+		nil,
 		apiServerOptions...,
 	)
 	if err != nil {

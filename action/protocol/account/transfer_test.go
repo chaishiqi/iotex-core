@@ -17,30 +17,29 @@ import (
 	"github.com/iotexproject/iotex-address/address"
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	accountutil "github.com/iotexproject/iotex-core/action/protocol/account/util"
-	"github.com/iotexproject/iotex-core/action/protocol/rewarding"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/state"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/testutil"
-	"github.com/iotexproject/iotex-core/testutil/testdb"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	accountutil "github.com/iotexproject/iotex-core/v2/action/protocol/account/util"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rewarding"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/state"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/testutil"
+	"github.com/iotexproject/iotex-core/v2/testutil/testdb"
 )
 
 func TestProtocol_ValidateTransfer(t *testing.T) {
 	require := require.New(t)
 	p := NewProtocol(rewarding.DepositGas)
 	t.Run("invalid transfer", func(t *testing.T) {
-		tsf, err := action.NewTransfer(uint64(1), big.NewInt(1), "2", make([]byte, 32683), uint64(0), big.NewInt(0))
-		require.NoError(err)
-		tsf1, err := action.NewTransfer(uint64(1), big.NewInt(1), "2", nil, uint64(0), big.NewInt(0))
-		require.NoError(err)
-		g := genesis.Default
+		tsf := action.NewTransfer(big.NewInt(1), "2", make([]byte, 32683))
+		tsf1 := action.NewTransfer(big.NewInt(1), "2", nil)
+		g := genesis.TestDefault()
 		ctx := protocol.WithFeatureCtx(genesis.WithGenesisContext(protocol.WithBlockCtx(context.Background(), protocol.BlockCtx{
 			BlockHeight: g.NewfoundlandBlockHeight,
 		}), g))
+		builder := action.EnvelopeBuilder{}
 		for _, v := range []struct {
 			tsf *action.Transfer
 			err error
@@ -48,7 +47,8 @@ func TestProtocol_ValidateTransfer(t *testing.T) {
 			{tsf, action.ErrOversizedData},
 			{tsf1, address.ErrInvalidAddr},
 		} {
-			require.Equal(v.err, errors.Cause(p.Validate(ctx, v.tsf, nil)))
+			elp := builder.SetNonce(1).SetAction(v.tsf).Build()
+			require.Equal(v.err, errors.Cause(p.Validate(ctx, elp, nil)))
 		}
 	})
 }
@@ -61,12 +61,13 @@ func TestProtocol_HandleTransfer(t *testing.T) {
 
 	// set-up protocol and genesis states
 	p := NewProtocol(rewarding.DepositGas)
-	reward := rewarding.NewProtocol(genesis.Default.Rewarding)
+	g := genesis.TestDefault()
+	reward := rewarding.NewProtocol(g.Rewarding)
 	registry := protocol.NewRegistry()
 	require.NoError(reward.Register(registry))
 	chainCtx := genesis.WithGenesisContext(
 		protocol.WithRegistry(context.Background(), registry),
-		genesis.Default,
+		g,
 	)
 	ctx := protocol.WithBlockCtx(chainCtx, protocol.BlockCtx{})
 	ctx = protocol.WithFeatureCtx(ctx)
@@ -110,11 +111,15 @@ func TestProtocol_HandleTransfer(t *testing.T) {
 		},
 	}
 
+	builder := action.EnvelopeBuilder{}
 	for _, v := range tests {
-		tsf, err := action.NewTransfer(v.nonce, v.amount, v.recipient, []byte{}, v.gasLimit, v.gasPrice)
-		require.NoError(err)
+		tsf := action.NewTransfer(v.amount, v.recipient, []byte{})
 		gas, err := tsf.IntrinsicGas()
 		require.NoError(err)
+		elp := builder.SetNonce(v.nonce).
+			SetGasLimit(v.gasLimit).
+			SetGasPrice(v.gasPrice).
+			SetAction(tsf).Build()
 
 		ctx := protocol.WithActionCtx(chainCtx, protocol.ActionCtx{
 			Caller:       v.caller,
@@ -126,6 +131,9 @@ func TestProtocol_HandleTransfer(t *testing.T) {
 			Producer:    identityset.Address(27),
 			GasLimit:    testutil.TestGasLimit,
 		})
+		ctx = protocol.WithBlockchainCtx(ctx, protocol.BlockchainCtx{
+			Tip: protocol.TipInfo{},
+		})
 
 		sender, err := accountutil.AccountState(ctx, sm, v.caller)
 		require.NoError(err)
@@ -136,7 +144,7 @@ func TestProtocol_HandleTransfer(t *testing.T) {
 		gasFee := new(big.Int).Mul(v.gasPrice, new(big.Int).SetUint64(gas))
 
 		ctx = protocol.WithFeatureCtx(ctx)
-		receipt, err := p.Handle(ctx, tsf, sm)
+		receipt, err := p.Handle(ctx, elp, sm)
 		require.Equal(v.err, errors.Cause(err))
 		if err != nil {
 			require.Nil(receipt)

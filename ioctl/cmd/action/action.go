@@ -21,14 +21,14 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/ioctl/cmd/account"
-	"github.com/iotexproject/iotex-core/ioctl/cmd/bc"
-	"github.com/iotexproject/iotex-core/ioctl/config"
-	"github.com/iotexproject/iotex-core/ioctl/flag"
-	"github.com/iotexproject/iotex-core/ioctl/output"
-	"github.com/iotexproject/iotex-core/ioctl/util"
-	"github.com/iotexproject/iotex-core/pkg/util/byteutil"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/ioctl/cmd/account"
+	"github.com/iotexproject/iotex-core/v2/ioctl/cmd/bc"
+	"github.com/iotexproject/iotex-core/v2/ioctl/config"
+	"github.com/iotexproject/iotex-core/v2/ioctl/flag"
+	"github.com/iotexproject/iotex-core/v2/ioctl/output"
+	"github.com/iotexproject/iotex-core/v2/ioctl/util"
+	"github.com/iotexproject/iotex-core/v2/pkg/util/byteutil"
 )
 
 // Multi-language support
@@ -49,8 +49,6 @@ var (
 
 const _defaultGasLimit = uint64(20000000)
 
-// var defaultGasPrice = big.NewInt(unit.Qev)
-
 // Flags
 var (
 	_gasLimitFlag = flag.NewUint64VarP("gas-limit", "l", _defaultGasLimit, "set gas limit")
@@ -59,7 +57,6 @@ var (
 	_signerFlag   = flag.NewStringVarP("signer", "s", "", "choose a signing account")
 	_bytecodeFlag = flag.NewStringVarP("bytecode", "b", "", "set the byte code")
 	_yesFlag      = flag.BoolVarP("assume-yes", "y", false, "answer yes for all confirmations")
-	_passwordFlag = flag.NewStringVarP("password", "P", "", "input password for account")
 )
 
 // ActionCmd represents the action command
@@ -140,7 +137,7 @@ func RegisterWriteCommand(cmd *cobra.Command) {
 	_signerFlag.RegisterCommand(cmd)
 	_nonceFlag.RegisterCommand(cmd)
 	_yesFlag.RegisterCommand(cmd)
-	_passwordFlag.RegisterCommand(cmd)
+	account.RegisterPasswordFlag(cmd)
 }
 
 // gasPriceInRau returns the suggest gas price
@@ -177,10 +174,10 @@ func gasPriceInRau() (*big.Int, error) {
 	return new(big.Int).SetUint64(response.GasPrice), nil
 }
 
-func fixGasLimit(caller string, execution *action.Execution) (*action.Execution, error) {
+func fixGasLimit(caller string, execution *action.Execution) (uint64, error) {
 	conn, err := util.ConnectToEndpoint(config.ReadConfig.SecureConnect && !config.Insecure)
 	if err != nil {
-		return nil, output.NewError(output.NetworkError, "failed to connect to endpoint", err)
+		return 0, output.NewError(output.NetworkError, "failed to connect to endpoint", err)
 	}
 	defer conn.Close()
 	cli := iotexapi.NewAPIServiceClient(conn)
@@ -201,12 +198,12 @@ func fixGasLimit(caller string, execution *action.Execution) (*action.Execution,
 	if err != nil {
 		sta, ok := status.FromError(err)
 		if ok {
-			return nil, output.NewError(output.APIError, sta.Message(), nil)
+			return 0, output.NewError(output.APIError, sta.Message(), nil)
 		}
-		return nil, output.NewError(output.NetworkError,
+		return 0, output.NewError(output.NetworkError,
 			"failed to invoke EstimateActionGasConsumption api", err)
 	}
-	return action.NewExecution(execution.Contract(), execution.Nonce(), execution.Amount(), res.Gas, execution.GasPrice(), execution.Data())
+	return res.Gas, nil
 }
 
 // SendRaw sends raw action to blockchain
@@ -218,19 +215,7 @@ func SendRaw(selp *iotextypes.Action) error {
 
 	shash := hash.Hash256b(byteutil.Must(proto.Marshal(selp)))
 	txhash := hex.EncodeToString(shash[:])
-	message := sendMessage{Info: "Action has been sent to blockchain.", TxHash: txhash, URL: "https://"}
-	switch config.ReadConfig.Explorer {
-	case "iotexscan":
-		if strings.Contains(config.ReadConfig.Endpoint, "testnet") {
-			message.URL += "testnet."
-		}
-		message.URL += "iotexscan.io/action/" + txhash
-	case "iotxplorer":
-		message.URL = "iotxplorer.io/actions/" + txhash
-	default:
-		message.URL = config.ReadConfig.Explorer + txhash
-	}
-	fmt.Println(message.String())
+	outputActionInfo(txhash)
 	return nil
 }
 
@@ -262,13 +247,17 @@ func SendRawAndRespond(selp *iotextypes.Action) (*iotexapi.SendActionResponse, e
 
 // SendAction sends signed action to blockchain
 func SendAction(elp action.Envelope, signer string) error {
-	_, err := SendActionAndResponse(elp, signer)
-	return err
+	resp, err := SendActionAndResponse(elp, signer)
+	if err != nil {
+		return err
+	}
+	outputActionInfo(resp.ActionHash)
+	return nil
 }
 
 // SendActionAndResponse sends signed action to blockchain with response and error return
 func SendActionAndResponse(elp action.Envelope, signer string) (*iotexapi.SendActionResponse, error) {
-	prvKey, err := account.PrivateKeyFromSigner(signer, _passwordFlag.Value().(string))
+	prvKey, err := account.PrivateKeyFromSigner(signer, account.PasswordByFlag())
 	if err != nil {
 		return nil, err
 	}
@@ -324,8 +313,12 @@ func SendActionAndResponse(elp action.Envelope, signer string) (*iotexapi.SendAc
 
 // Execute sends signed execution transaction to blockchain
 func Execute(contract string, amount *big.Int, bytecode []byte) error {
-	_, err := ExecuteAndResponse(contract, amount, bytecode)
-	return err
+	resp, err := ExecuteAndResponse(contract, amount, bytecode)
+	if err != nil {
+		return err
+	}
+	outputActionInfo(resp.ActionHash)
+	return nil
 }
 
 // ExecuteAndResponse sends signed execution transaction to blockchain and with response and error return
@@ -346,16 +339,12 @@ func ExecuteAndResponse(contract string, amount *big.Int, bytecode []byte) (*iot
 		return nil, output.NewError(0, "failed to get nonce", err)
 	}
 	gasLimit := _gasLimitFlag.Value().(uint64)
-	tx, err := action.NewExecution(contract, nonce, amount, gasLimit, gasPriceRau, bytecode)
-	if err != nil || tx == nil {
-		return nil, output.NewError(output.InstantiationError, "failed to make a Execution instance", err)
-	}
+	tx := action.NewExecution(contract, amount, bytecode)
 	if gasLimit == 0 {
-		tx, err = fixGasLimit(signer, tx)
-		if err != nil || tx == nil {
+		gasLimit, err = fixGasLimit(signer, tx)
+		if err != nil {
 			return nil, output.NewError(0, "failed to fix Execution gaslimit", err)
 		}
-		gasLimit = tx.GasLimit()
 	}
 	return SendActionAndResponse(
 		(&action.EnvelopeBuilder{}).
@@ -423,4 +412,20 @@ func isBalanceEnough(address string, act *action.SealedEnvelope) error {
 		return output.NewError(output.ValidationError, "balance is not enough", nil)
 	}
 	return nil
+}
+
+func outputActionInfo(txhash string) {
+	message := sendMessage{Info: "Action has been sent to blockchain.", TxHash: txhash, URL: "https://"}
+	switch config.ReadConfig.Explorer {
+	case "iotexscan":
+		if strings.Contains(config.ReadConfig.Endpoint, "testnet") {
+			message.URL += "testnet."
+		}
+		message.URL += "iotexscan.io/action/" + txhash
+	case "iotxplorer":
+		message.URL = "iotxplorer.io/actions/" + txhash
+	default:
+		message.URL = config.ReadConfig.Explorer + txhash
+	}
+	fmt.Println(message.String())
 }

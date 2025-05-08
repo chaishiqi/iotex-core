@@ -17,16 +17,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/iotexproject/go-pkgs/hash"
-	"github.com/iotexproject/iotex-address/address"
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/state"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/test/mock/mock_chainmanager"
-	"github.com/iotexproject/iotex-core/testutil"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/state"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/test/mock/mock_chainmanager"
+	"github.com/iotexproject/iotex-core/v2/testutil"
 )
 
 func TestExecuteContractFailure(t *testing.T) {
@@ -37,15 +36,9 @@ func TestExecuteContractFailure(t *testing.T) {
 	sm.EXPECT().PutState(gomock.Any(), gomock.Any()).Return(uint64(0), nil).AnyTimes()
 	sm.EXPECT().Snapshot().Return(1).AnyTimes()
 
-	e, err := action.NewExecution(
-		"",
-		1,
-		big.NewInt(0),
-		testutil.TestGasLimit,
-		big.NewInt(10),
-		nil,
-	)
-	require.NoError(t, err)
+	e := action.NewExecution("", big.NewInt(0), nil)
+	elp := (&action.EnvelopeBuilder{}).SetNonce(1).SetGasPrice(big.NewInt(10)).
+		SetGasLimit(testutil.TestGasLimit).SetAction(e).Build()
 
 	ctx := protocol.WithActionCtx(context.Background(), protocol.ActionCtx{
 		Caller: identityset.Address(27),
@@ -54,7 +47,7 @@ func TestExecuteContractFailure(t *testing.T) {
 		Producer: identityset.Address(27),
 		GasLimit: testutil.TestGasLimit,
 	})
-	ctx = genesis.WithGenesisContext(ctx, genesis.Default)
+	ctx = genesis.WithGenesisContext(ctx, genesis.TestDefault())
 
 	ctx = protocol.WithBlockchainCtx(protocol.WithFeatureCtx(ctx), protocol.BlockchainCtx{
 		ChainID:      1,
@@ -67,12 +60,11 @@ func TestExecuteContractFailure(t *testing.T) {
 		GetBlockTime: func(uint64) (time.Time, error) {
 			return time.Time{}, nil
 		},
-		DepositGasFunc: func(context.Context, protocol.StateManager, address.Address, *big.Int, *big.Int) (*action.TransactionLog, error) {
+		DepositGasFunc: func(context.Context, protocol.StateManager, *big.Int, ...protocol.DepositOption) ([]*action.TransactionLog, error) {
 			return nil, nil
 		},
-		Sgd: nil,
 	})
-	retval, receipt, err := ExecuteContract(ctx, sm, e)
+	retval, receipt, err := ExecuteContract(ctx, sm, elp)
 	require.Nil(t, retval)
 	require.Nil(t, receipt)
 	require.Error(t, err)
@@ -89,7 +81,7 @@ func TestConstantinople(t *testing.T) {
 	})
 
 	evmNetworkID := uint32(100)
-	g := genesis.Default
+	g := genesis.TestDefault()
 	ctx = protocol.WithBlockchainCtx(genesis.WithGenesisContext(ctx, g), protocol.BlockchainCtx{
 		ChainID:      1,
 		EvmNetworkID: evmNetworkID,
@@ -252,10 +244,37 @@ func TestConstantinople(t *testing.T) {
 			"io1pcg2ja9krrhujpazswgz77ss46xgt88afqlk6y",
 			29275560,
 		},
-		// after Tsunami
+		// after Tsunami - Upernavik
 		{
 			action.EmptyAddress,
 			29275561,
+		},
+		{
+			"io1pcg2ja9krrhujpazswgz77ss46xgt88afqlk6y",
+			31174200,
+		},
+		// after Upernavik - Vanuatu
+		{
+			action.EmptyAddress,
+			31174201,
+		},
+		{
+			"io1pcg2ja9krrhujpazswgz77ss46xgt88afqlk6y",
+			33730920,
+		},
+		// after Vanuatu - Wake
+		{
+			action.EmptyAddress,
+			33730921,
+		},
+		{
+			"io1pcg2ja9krrhujpazswgz77ss46xgt88afqlk6y",
+			43730920,
+		},
+		// after Wake
+		{
+			action.EmptyAddress,
+			43730921,
 		},
 		{
 			"io1pcg2ja9krrhujpazswgz77ss46xgt88afqlk6y",
@@ -267,15 +286,9 @@ func TestConstantinople(t *testing.T) {
 		return now.Add(time.Duration(height) * time.Second * 5), nil
 	}
 	for _, e := range execHeights {
-		ex, err := action.NewExecution(
-			e.contract,
-			1,
-			big.NewInt(0),
-			testutil.TestGasLimit,
-			big.NewInt(10),
-			nil,
-		)
-		require.NoError(err)
+		ex := action.NewExecution(e.contract, big.NewInt(0), nil)
+		elp := (&action.EnvelopeBuilder{}).SetNonce(1).SetGasPrice(big.NewInt(10)).
+			SetGasLimit(testutil.TestGasLimit).SetAction(ex).Build()
 
 		timestamp, err := getBlockTime(e.height)
 		require.NoError(err)
@@ -293,7 +306,7 @@ func TestConstantinople(t *testing.T) {
 		})
 		stateDB, err := prepareStateDB(fCtx, sm)
 		require.NoError(err)
-		ps, err := newParams(fCtx, ex, stateDB)
+		ps, err := newParams(fCtx, elp)
 		require.NoError(err)
 
 		evm := vm.NewEVM(ps.context, ps.txCtx, stateDB, ps.chainConfig, ps.evmConfig)
@@ -355,9 +368,16 @@ func TestConstantinople(t *testing.T) {
 		require.Equal(isSumatra, chainRules.IsMerge)
 		require.Equal(isSumatra, chainRules.IsShanghai)
 
-		// Cancun, Prague not yet enabled
-		require.False(evmChainConfig.IsCancun(big.NewInt(int64(e.height)), evm.Context.Time))
+		// Vanuatu = enable Cancun
+		isVanuatu := g.IsVanuatu(e.height)
+		require.Equal(isVanuatu, chainRules.IsCancun)
+		require.Equal(isVanuatu, evmChainConfig.IsCancun(big.NewInt(int64(e.height)), evm.Context.Time))
+
+		// Prague and Verkle not yet enabled
+		require.False(chainRules.IsPrague)
 		require.False(evmChainConfig.IsPrague(big.NewInt(int64(e.height)), evm.Context.Time))
+		require.False(chainRules.IsVerkle)
+		require.False(evmChainConfig.IsVerkle(big.NewInt(int64(e.height)), evm.Context.Time))
 
 		// test basefee
 		require.Equal(new(big.Int), evm.Context.BaseFee)
@@ -366,7 +386,7 @@ func TestConstantinople(t *testing.T) {
 
 func TestEvmError(t *testing.T) {
 	r := require.New(t)
-	g := genesis.Default.Blockchain
+	g := genesis.TestDefault().Blockchain
 
 	beringTests := []struct {
 		evmError error
@@ -431,7 +451,7 @@ func TestGasEstimate(t *testing.T) {
 	for _, v := range []struct {
 		gas, consume, refund, size uint64
 	}{
-		{genesis.Default.BlockGasLimit, 8200300, 1000000, 20000},
+		{genesis.TestDefault().BlockGasLimit, 8200300, 1000000, 20000},
 		{1000000, 245600, 100000, 5600},
 		{500000, 21000, 10000, 36},
 	} {

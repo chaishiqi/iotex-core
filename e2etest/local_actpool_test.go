@@ -12,18 +12,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libp2p/go-libp2p-core/peer"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/iotexproject/go-pkgs/crypto"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/config"
-	"github.com/iotexproject/iotex-core/p2p"
-	"github.com/iotexproject/iotex-core/server/itx"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/testutil"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/config"
+	"github.com/iotexproject/iotex-core/v2/p2p"
+	"github.com/iotexproject/iotex-core/v2/server/itx"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/testutil"
 )
 
 func TestLocalActPool(t *testing.T) {
@@ -53,6 +54,9 @@ func TestLocalActPool(t *testing.T) {
 		cfg.Network,
 		cfg.Chain.ID,
 		cfg.Genesis.Hash(),
+		func(proto.Message) (bool, error) {
+			return false, nil
+		},
 		func(_ context.Context, _ uint32, _ string, _ proto.Message) {
 
 		},
@@ -112,6 +116,7 @@ func TestPressureActPool(t *testing.T) {
 
 	cfg, err := newActPoolConfig(t)
 	require.NoError(err)
+	cfg.Dispatcher.AccountRateLimit = 1000
 
 	// create server
 	ctx := context.Background()
@@ -131,6 +136,9 @@ func TestPressureActPool(t *testing.T) {
 		cfg.Network,
 		cfg.Chain.ID,
 		cfg.Genesis.Hash(),
+		func(proto.Message) (bool, error) {
+			return false, nil
+		},
 		func(_ context.Context, _ uint32, _ string, _ proto.Message) {
 
 		},
@@ -174,31 +182,13 @@ func newActPoolConfig(t *testing.T) (config.Config, error) {
 	r := require.New(t)
 
 	cfg := config.Default
+	cfg.Genesis = genesis.TestDefault()
 
-	testTriePath, err := testutil.PathOfTempFile("trie")
-	r.NoError(err)
-	testDBPath, err := testutil.PathOfTempFile("db")
-	r.NoError(err)
-	testIndexPath, err := testutil.PathOfTempFile("index")
-	r.NoError(err)
-	testContractIndexPath, err := testutil.PathOfTempFile("contractindex")
-	r.NoError(err)
-	testSGDIndexPath, err := testutil.PathOfTempFile("sgdindex")
-	r.NoError(err)
+	initDBPaths(r, &cfg)
 	defer func() {
-		testutil.CleanupPath(testTriePath)
-		testutil.CleanupPath(testDBPath)
-		testutil.CleanupPath(testIndexPath)
-		testutil.CleanupPath(testContractIndexPath)
-		testutil.CleanupPath(testSGDIndexPath)
+		clearDBPaths(&cfg)
 	}()
 
-	cfg.Chain.TrieDBPatchFile = ""
-	cfg.Chain.TrieDBPath = testTriePath
-	cfg.Chain.ChainDBPath = testDBPath
-	cfg.Chain.IndexDBPath = testIndexPath
-	cfg.Chain.ContractStakingIndexDBPath = testContractIndexPath
-	cfg.Chain.SGDIndexDBPath = testSGDIndexPath
 	cfg.ActPool.MinGasPriceStr = "0"
 	cfg.Consensus.Scheme = config.NOOPScheme
 	cfg.Network.Port = testutil.RandomPort()

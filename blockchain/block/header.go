@@ -1,4 +1,4 @@
-// Copyright (c) 2019 IoTeX Foundation
+// Copyright (c) 2024 IoTeX Foundation
 // This source code is provided 'as is' and no warranties are given as to title or non-infringement, merchantability
 // or fitness for purpose and, to the extent permitted by law, all liability for your use of the code is disclaimed.
 // This source code is governed by Apache License 2.0 that can be found in the LICENSE file.
@@ -6,6 +6,7 @@
 package block
 
 import (
+	"math/big"
 	"time"
 
 	"github.com/iotexproject/go-pkgs/bloom"
@@ -17,8 +18,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/pkg/util/byteutil"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/pkg/util/byteutil"
 )
 
 // Header defines the struct of block header
@@ -26,6 +27,7 @@ import (
 type Header struct {
 	version          uint32            // version
 	height           uint64            // block height
+	gasUsed          uint64            // used gas
 	timestamp        time.Time         // propose timestamp
 	prevBlockHash    hash.Hash256      // hash of previous block
 	txRoot           hash.Hash256      // merkle root of all transactions
@@ -34,6 +36,11 @@ type Header struct {
 	logsBloom        bloom.BloomFilter // bloom filter for all contract events in this block
 	blockSig         []byte            // block signature
 	pubkey           crypto.PublicKey  // block producer's public key
+	baseFee          *big.Int          // added by EIP-1559 and is ignored in legacy headers
+
+	// added by EIP-4844 and is ignored in legacy headers.
+	blobGasUsed   uint64
+	excessBlobGas uint64
 }
 
 // Errors
@@ -48,6 +55,9 @@ func (h *Header) Version() uint32 { return h.version }
 
 // Height returns the height of this block.
 func (h *Header) Height() uint64 { return h.height }
+
+// GasUsed returns the gas used in this block.
+func (h *Header) GasUsed() uint64 { return h.gasUsed }
 
 // Timestamp returns the Timestamp of this block.
 func (h *Header) Timestamp() time.Time { return h.timestamp }
@@ -73,6 +83,24 @@ func (h *Header) HashBlock() hash.Hash256 { return h.HashHeader() }
 // LogsBloomfilter return the bloom filter for all contract log events
 func (h *Header) LogsBloomfilter() bloom.BloomFilter { return h.logsBloom }
 
+// BaseFee returns the baseFee of the block
+func (h *Header) BaseFee() *big.Int {
+	if h.baseFee == nil {
+		return nil
+	}
+	return new(big.Int).Set(h.baseFee)
+}
+
+// BlobGasUsed returns the blob gas used in this block
+func (h *Header) BlobGasUsed() uint64 {
+	return h.blobGasUsed
+}
+
+// ExcessBlobGas returns the excess blob gas in this block
+func (h *Header) ExcessBlobGas() uint64 {
+	return h.excessBlobGas
+}
+
 // Proto returns BlockHeader proto.
 func (h *Header) Proto() *iotextypes.BlockHeader {
 	header := iotextypes.BlockHeader{
@@ -92,14 +120,20 @@ func (h *Header) BlockHeaderCoreProto() *iotextypes.BlockHeaderCore {
 	header := iotextypes.BlockHeaderCore{
 		Version:          h.version,
 		Height:           h.height,
+		GasUsed:          h.gasUsed,
 		Timestamp:        ts,
 		PrevBlockHash:    h.prevBlockHash[:],
 		TxRoot:           h.txRoot[:],
 		DeltaStateDigest: h.deltaStateDigest[:],
 		ReceiptRoot:      h.receiptRoot[:],
+		BlobGasUsed:      h.blobGasUsed,
+		ExcessBlobGas:    h.excessBlobGas,
 	}
 	if h.logsBloom != nil {
 		header.LogsBloom = h.logsBloom.Bytes()
+	}
+	if h.baseFee != nil {
+		header.BaseFee = h.baseFee.Bytes()
 	}
 	return &header
 }
@@ -123,6 +157,7 @@ func (h *Header) LoadFromBlockHeaderProto(pb *iotextypes.BlockHeader) error {
 func (h *Header) loadFromBlockHeaderCoreProto(pb *iotextypes.BlockHeaderCore) error {
 	h.version = pb.GetVersion()
 	h.height = pb.GetHeight()
+	h.gasUsed = pb.GetGasUsed()
 	if err := pb.GetTimestamp().CheckValid(); err != nil {
 		return err
 	}
@@ -142,6 +177,11 @@ func (h *Header) loadFromBlockHeaderCoreProto(pb *iotextypes.BlockHeaderCore) er
 			return err
 		}
 	}
+	if fee := pb.GetBaseFee(); fee != nil {
+		h.baseFee = new(big.Int).SetBytes(fee)
+	}
+	h.blobGasUsed = pb.GetBlobGasUsed()
+	h.excessBlobGas = pb.GetExcessBlobGas()
 	return err
 }
 
@@ -215,5 +255,7 @@ func (h *Header) HeaderLogger(l *zap.Logger) *zap.Logger {
 		log.Hex("txRoot", h.txRoot[:]),
 		log.Hex("receiptRoot", h.receiptRoot[:]),
 		log.Hex("deltaStateDigest", h.deltaStateDigest[:]),
+		zap.Uint64("blobGasUsed", h.blobGasUsed),
+		zap.Uint64("excessBlobGas", h.excessBlobGas),
 	)
 }

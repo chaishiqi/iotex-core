@@ -11,7 +11,7 @@ import (
 	fsm "github.com/iotexproject/go-fsm"
 	"go.uber.org/zap"
 
-	"github.com/iotexproject/iotex-core/pkg/lifecycle"
+	"github.com/iotexproject/iotex-core/v2/pkg/lifecycle"
 )
 
 // Context defines the context of the fsm
@@ -26,13 +26,13 @@ type Context interface {
 	Logger() *zap.Logger
 	Height() uint64
 
-	NewConsensusEvent(fsm.EventType, interface{}) *ConsensusEvent
-	NewBackdoorEvt(fsm.State) *ConsensusEvent
+	NewConsensusEvent(fsm.EventType, interface{}) []*ConsensusEvent
+	NewBackdoorEvt(fsm.State) []*ConsensusEvent
 
 	Broadcast(interface{})
 
 	Prepare() error
-	IsDelegate() bool
+	HasDelegate() bool
 	Proposal() (interface{}, error)
 	WaitUntilRoundStart() time.Duration
 	PreCommitEndorsement() interface{}

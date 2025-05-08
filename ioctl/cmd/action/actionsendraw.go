@@ -12,14 +12,14 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/iotexproject/iotex-core/ioctl/config"
-	"github.com/iotexproject/iotex-core/ioctl/output"
+	"github.com/iotexproject/iotex-core/v2/ioctl/config"
+	"github.com/iotexproject/iotex-core/v2/ioctl/output"
 )
 
 // Multi-language support
 var (
 	_sendRawCmdShorts = map[config.Language]string{
-		config.English: "Send raw action on IoTeX blokchain",
+		config.English: "Send raw action on IoTeX blockchain",
 		config.Chinese: "在IoTeX区块链上发送原始行为",
 	}
 	_sendRawCmdUses = map[config.Language]string{

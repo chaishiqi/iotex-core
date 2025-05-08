@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"math/rand"
 	"os"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -22,22 +23,25 @@ import (
 	"github.com/iotexproject/iotex-proto/golang/iotexapi"
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	accountutil "github.com/iotexproject/iotex-core/action/protocol/account/util"
-	"github.com/iotexproject/iotex-core/action/protocol/rewarding"
-	"github.com/iotexproject/iotex-core/api"
-	"github.com/iotexproject/iotex-core/blockchain"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/config"
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/pkg/probe"
-	"github.com/iotexproject/iotex-core/pkg/util/fileutil"
-	"github.com/iotexproject/iotex-core/server/itx"
-	"github.com/iotexproject/iotex-core/state/factory"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/testutil"
-	"github.com/iotexproject/iotex-core/tools/util"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	accountutil "github.com/iotexproject/iotex-core/v2/action/protocol/account/util"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rewarding"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rewarding/rewardingpb"
+	"github.com/iotexproject/iotex-core/v2/api"
+	"github.com/iotexproject/iotex-core/v2/blockchain"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/config"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/pkg/probe"
+	"github.com/iotexproject/iotex-core/v2/pkg/unit"
+	"github.com/iotexproject/iotex-core/v2/pkg/util/fileutil"
+	"github.com/iotexproject/iotex-core/v2/server/itx"
+	"github.com/iotexproject/iotex-core/v2/state/factory"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/testutil"
+	"github.com/iotexproject/iotex-core/v2/tools/util"
 )
 
 type claimTestCaseID int
@@ -61,19 +65,10 @@ const (
 
 func TestBlockReward(t *testing.T) {
 	r := require.New(t)
-	testTriePath, err := testutil.PathOfTempFile("trie")
-	r.NoError(err)
-	testDBPath, err := testutil.PathOfTempFile("db")
-	r.NoError(err)
-	testIndexPath, err := testutil.PathOfTempFile("index")
-	r.NoError(err)
-	testConsensusPath, err := testutil.PathOfTempFile("cons")
-	r.NoError(err)
-	testContractIndexPath, err := testutil.PathOfTempFile("contractindex")
-	r.NoError(err)
-	testSGDIndexPath, err := testutil.PathOfTempFile("sgdindex")
-	r.NoError(err)
 	cfg := config.Default
+	cfg.Genesis = genesis.TestDefault()
+	initDBPaths(r, &cfg)
+	defer func() { clearDBPaths(&cfg) }()
 	cfg.Consensus.Scheme = config.RollDPoSScheme
 	cfg.Genesis.NumDelegates = 1
 	cfg.Genesis.NumSubEpochs = 10
@@ -89,17 +84,23 @@ func TestBlockReward(t *testing.T) {
 	cfg.Consensus.RollDPoS.FSM.AcceptProposalEndorsementTTL = 300 * time.Millisecond
 	cfg.Consensus.RollDPoS.FSM.AcceptLockEndorsementTTL = 300 * time.Millisecond
 	cfg.Consensus.RollDPoS.FSM.CommitTTL = 100 * time.Millisecond
-	cfg.Consensus.RollDPoS.ConsensusDBPath = testConsensusPath
-	cfg.Genesis.EnableGravityChainVoting = false
+	cfg.DardanellesUpgrade.AcceptBlockTTL = 300 * time.Millisecond
+	cfg.DardanellesUpgrade.AcceptProposalEndorsementTTL = 300 * time.Millisecond
+	cfg.DardanellesUpgrade.AcceptLockEndorsementTTL = 300 * time.Millisecond
+	cfg.DardanellesUpgrade.CommitTTL = 100 * time.Millisecond
+	cfg.DardanellesUpgrade.BlockInterval = time.Second
+	cfg.Chain.MintTimeout = 100 * time.Millisecond
 	cfg.Chain.ProducerPrivKey = identityset.PrivateKey(0).HexString()
-	cfg.Chain.TrieDBPatchFile = ""
-	cfg.Chain.TrieDBPath = testTriePath
-	cfg.Chain.ChainDBPath = testDBPath
-	cfg.Chain.IndexDBPath = testIndexPath
-	cfg.Chain.ContractStakingIndexDBPath = testContractIndexPath
-	cfg.Chain.SGDIndexDBPath = testSGDIndexPath
 	cfg.Network.Port = testutil.RandomPort()
 	cfg.Genesis.PollMode = "lifeLong"
+	cfg.Genesis.AleutianBlockHeight = 0
+	cfg.Genesis.DardanellesBlockHeight = 1 // enable block reward
+	cfg.Genesis.GreenlandBlockHeight = 6
+	cfg.Genesis.KamchatkaBlockHeight = 7
+	cfg.Genesis.VanuatuBlockHeight = 8      // enable dynamic fee
+	cfg.Genesis.ToBeEnabledBlockHeight = 10 // enable wake block reward
+	testutil.NormalizeGenesisHeights(&cfg.Genesis.Blockchain)
+	block.LoadGenesisHash(&cfg.Genesis)
 
 	svr, err := itx.NewServer(cfg)
 	require.NoError(t, err)
@@ -107,6 +108,35 @@ func TestBlockReward(t *testing.T) {
 	defer func() {
 		require.NoError(t, svr.Stop(context.Background()))
 	}()
+
+	inject := func(ctx context.Context, tps int) {
+		actpool := svr.ChainService(cfg.Chain.ID).ActionPool()
+		senderSK := identityset.PrivateKey(1)
+		amount := big.NewInt(100)
+		gasLimit := uint64(100000)
+		gasPrice := big.NewInt(unit.Qev * 2)
+		nonce, err := actpool.GetPendingNonce(senderSK.PublicKey().Address().String())
+		require.NoError(t, err)
+		ticker := time.NewTicker(time.Second / time.Duration(tps))
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				tx, err := action.SignedTransfer(identityset.Address(10).String(), senderSK, nonce, amount, nil, gasLimit, gasPrice, action.WithChainID(cfg.Chain.ID))
+				require.NoError(t, err)
+				if err = actpool.Add(ctx, tx); err != nil {
+					t.Log("failed to add action to actpool", zap.Error(err))
+				} else {
+					nonce++
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+	ctxInject, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go inject(ctxInject, 10)
 
 	require.NoError(t, testutil.WaitUntil(100*time.Millisecond, 20*time.Second, func() (b bool, e error) {
 		return svr.ChainService(1).Blockchain().TipHeight() >= 5, nil
@@ -136,19 +166,63 @@ func TestBlockReward(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, balance.Cmp(big.NewInt(0).Mul(blockReward, big.NewInt(5))) <= 0)
 
-	for i := 1; i <= 5; i++ {
-		blk, err := svr.ChainService(1).BlockDAO().GetBlockByHeight(uint64(i))
+	checkBlockReward := func(blockHeight uint64) {
+		blk, err := svr.ChainService(1).BlockDAO().GetBlockByHeight(uint64(blockHeight))
 		require.NoError(t, err)
 		ok := false
-		var gr *action.GrantReward
-		for _, act := range blk.Body.Actions {
+		var (
+			gr  *action.GrantReward
+			idx int
+		)
+		for k, act := range blk.Body.Actions {
 			gr, ok = act.Action().(*action.GrantReward)
 			if ok {
-				assert.Equal(t, uint64(i), gr.Height())
+				idx = k
+				require.NoError(t, err)
+				assert.Equal(t, uint64(blockHeight), gr.Height())
 				break
 			}
 		}
 		assert.True(t, ok)
+		receipts, err := svr.ChainService(1).BlockDAO().GetReceipts(uint64(blockHeight))
+		require.NoError(t, err)
+		require.Len(t, receipts[idx].Logs(), 1)
+		rewardLogs, err := rewarding.UnmarshalRewardLog(receipts[idx].Logs()[0].Data)
+		require.NoError(t, err)
+
+		rewards := make(map[rewardingpb.RewardLog_RewardType]*big.Int)
+		rewards[rewardingpb.RewardLog_BLOCK_REWARD] = big.NewInt(0)
+		rewards[rewardingpb.RewardLog_PRIORITY_BONUS] = big.NewInt(0)
+		for _, txLog := range rewardLogs.Logs {
+			amount, ok := big.NewInt(0).SetString(txLog.Amount, 10)
+			require.True(t, ok)
+			rewards[txLog.Type] = amount
+		}
+
+		switch {
+		case blockHeight < cfg.Genesis.VanuatuBlockHeight:
+			// fixed block reward
+			assert.Equal(t, cfg.Genesis.DardanellesBlockReward().String(), rewards[rewardingpb.RewardLog_BLOCK_REWARD].String())
+			assert.Equal(t, big.NewInt(0).String(), rewards[rewardingpb.RewardLog_PRIORITY_BONUS].String())
+		case blockHeight < cfg.Genesis.ToBeEnabledBlockHeight:
+			// fixed block reward + priority bonus
+			require.True(t, rewards[rewardingpb.RewardLog_PRIORITY_BONUS].Sign() > 0, "blockHeight %d", blockHeight)
+			assert.Equal(t, cfg.Genesis.DardanellesBlockReward().String(), rewards[rewardingpb.RewardLog_BLOCK_REWARD].String())
+			assert.Equal(t, slices.ContainsFunc(blk.Actions, func(e *action.SealedEnvelope) bool { return !action.IsSystemAction(e) }), rewards[rewardingpb.RewardLog_PRIORITY_BONUS].Sign() > 0)
+		default:
+			// dynamic block reward + priority bonus
+			require.True(t, rewards[rewardingpb.RewardLog_PRIORITY_BONUS].Sign() > 0)
+			assert.Equal(t, slices.ContainsFunc(blk.Actions, func(e *action.SealedEnvelope) bool { return !action.IsSystemAction(e) }), rewards[rewardingpb.RewardLog_PRIORITY_BONUS].Sign() > 0)
+			total := new(big.Int).Add(rewards[rewardingpb.RewardLog_BLOCK_REWARD], rewards[rewardingpb.RewardLog_PRIORITY_BONUS])
+			assert.Equal(t, true, total.Cmp(cfg.Genesis.WakeBlockReward()) >= 0)
+		}
+	}
+
+	require.NoError(t, testutil.WaitUntil(100*time.Millisecond, 20*time.Second, func() (b bool, e error) {
+		return svr.ChainService(1).Blockchain().TipHeight() >= 11, nil
+	}))
+	for i := 1; i <= 11; i++ {
+		checkBlockReward(uint64(i))
 	}
 }
 
@@ -488,6 +562,78 @@ func TestBlockEpochReward(t *testing.T) {
 	}
 }
 
+func TestClaimReward(t *testing.T) {
+	t.Skip("")
+	require := require.New(t)
+	// set config
+	cfg := initCfg(require)
+	producerSK, err := crypto.HexStringToPrivateKey(cfg.Chain.ProducerPrivKey)
+	cfg.Genesis.TsunamiBlockHeight = 1
+	cfg.Genesis.UpernavikBlockHeight = 10
+	cfg.Genesis.InitBalanceMap[producerSK.PublicKey().Address().String()] = "100000000000000000000000000"
+	cfg.Plugins[config.GatewayPlugin] = struct{}{}
+	testutil.NormalizeGenesisHeights(&cfg.Genesis.Blockchain)
+	// new e2e test
+	test := newE2ETest(t, cfg)
+	defer test.teardown()
+	chainID := cfg.Chain.ID
+	gasPrice := big.NewInt(1)
+	require.NoError(err)
+	genTransferActions := func(n int) []*actionWithTime {
+		acts := make([]*actionWithTime, n)
+		for i := 0; i < n; i++ {
+			acts[i] = &actionWithTime{mustNoErr(action.SignedTransfer(identityset.Address(1).String(), identityset.PrivateKey(2), test.nonceMgr.pop(identityset.Address(2).String()), unit.ConvertIotxToRau(1), nil, gasLimit, gasPrice, action.WithChainID(chainID))), time.Now()}
+		}
+		return acts
+	}
+	callerBalance := big.NewInt(0)
+	producerBalance := big.NewInt(0)
+	// run test
+	test.run([]*testcase{
+		{
+			name:    "v1 claimreward before UpernavikBlockHeight",
+			preActs: genTransferActions(5),
+			act:     &actionWithTime{mustNoErr(action.SignedClaimRewardLegacy(test.nonceMgr.pop(producerSK.PublicKey().Address().String()), gasLimit, gasPrice, producerSK, unit.ConvertIotxToRau(1), nil, action.WithChainID(chainID))), time.Now()},
+			expect:  []actionExpect{successExpect},
+		},
+		{
+			name:   "v2 claimreward before UpernavikBlockHeight",
+			act:    &actionWithTime{mustNoErr(action.SignedClaimReward(test.nonceMgr[(identityset.Address(1).String())], gasLimit, gasPrice, identityset.PrivateKey(1), unit.ConvertIotxToRau(1), nil, producerSK.PublicKey().Address(), action.WithChainID(chainID))), time.Now()},
+			expect: []actionExpect{&basicActionExpect{err: errReceiptNotFound}},
+		},
+		{
+			name:    "v1 claimreward after UpernavikBlockHeight",
+			preActs: genTransferActions(5),
+			act:     &actionWithTime{mustNoErr(action.SignedClaimRewardLegacy(test.nonceMgr.pop(producerSK.PublicKey().Address().String()), gasLimit, gasPrice, producerSK, unit.ConvertIotxToRau(1), nil, action.WithChainID(chainID))), time.Now()},
+			expect:  []actionExpect{successExpect},
+		},
+		{
+			name: "v2 claimreward after UpernavikBlockHeight",
+			preFunc: func(e *e2etest) {
+				resp, err := e.api.GetAccount(context.Background(), &iotexapi.GetAccountRequest{Address: identityset.Address(1).String()})
+				require.NoError(err)
+				callerBalance, _ = big.NewInt(0).SetString(resp.GetAccountMeta().Balance, 10)
+				resp, err = e.api.GetAccount(context.Background(), &iotexapi.GetAccountRequest{Address: producerSK.PublicKey().Address().String()})
+				require.NoError(err)
+				producerBalance, _ = big.NewInt(0).SetString(resp.GetAccountMeta().Balance, 10)
+			},
+			act: &actionWithTime{mustNoErr(action.SignedClaimReward(test.nonceMgr.pop(identityset.Address(1).String()), gasLimit, gasPrice, identityset.PrivateKey(1), unit.ConvertIotxToRau(1), nil, producerSK.PublicKey().Address(), action.WithChainID(chainID))), time.Now()},
+			expect: []actionExpect{successExpect, &functionExpect{func(test *e2etest, act *action.SealedEnvelope, receipt *action.Receipt, err error) {
+				// caller balance sub action gas fee
+				resp, err := test.api.GetAccount(context.Background(), &iotexapi.GetAccountRequest{Address: identityset.Address(1).String()})
+				require.NoError(err)
+				callerBalance.Sub(callerBalance, big.NewInt(0).Mul(big.NewInt(int64(receipt.GasConsumed)), gasPrice))
+				require.Equal(callerBalance.String(), resp.GetAccountMeta().Balance)
+				// producer balance received 1 IOTX
+				resp, err = test.api.GetAccount(context.Background(), &iotexapi.GetAccountRequest{Address: producerSK.PublicKey().Address().String()})
+				require.NoError(err)
+				producerBalance.Add(producerBalance, unit.ConvertIotxToRau(1))
+				require.Equal(producerBalance.String(), resp.GetAccountMeta().Balance)
+			}}},
+		},
+	})
+}
+
 func injectClaim(
 	t *testing.T,
 	wg *sync.WaitGroup,
@@ -511,13 +657,12 @@ func injectClaim(
 	require.NoError(t, err)
 	nonce := response.AccountMeta.PendingNonce
 
-	b := &action.ClaimFromRewardingFundBuilder{}
-	act := b.SetAmount(amount).SetData(payload).Build()
+	act := action.NewClaimFromRewardingFund(amount, nil, payload)
 	bd := &action.EnvelopeBuilder{}
 	elp := bd.SetNonce(nonce).
 		SetGasPrice(big.NewInt(0)).
 		SetGasLimit(100000).
-		SetAction(&act).Build()
+		SetAction(act).Build()
 
 	selp, err := action.Sign(elp, beneficiaryPri)
 	require.NoError(t, err)
@@ -562,7 +707,7 @@ func updateExpectationWithPendingClaimList(
 			act := &action.ClaimFromRewardingFund{}
 			err = act.LoadProto(actInfo.GetAction().Core.GetClaimFromRewardingFund())
 			require.NoError(t, err)
-			amount := act.Amount()
+			amount := act.ClaimAmount()
 
 			if receipt.Status == uint64(iotextypes.ReceiptStatus_Success) {
 				newExpectUnclaimed := big.NewInt(0).Sub(exptUnclaimed[addr], amount)
@@ -594,6 +739,7 @@ func newConfig(
 	numNodes uint64,
 ) config.Config {
 	cfg := config.Default
+	cfg.Genesis = genesis.TestDefault()
 
 	cfg.Network.Port = networkPort
 	cfg.Network.BootstrapNodes = []string{"/ip4/127.0.0.1/tcp/4689/ipfs/12D3KooWJwW6pUpTkxPTMv84RPLPMQVEAjZ6fvJuX4oZrvW5DAGQ"}

@@ -1,3 +1,8 @@
+// Copyright (c) 2024 IoTeX Foundation
+// This source code is provided 'as is' and no warranties are given as to title or non-infringement, merchantability
+// or fitness for purpose and, to the extent permitted by law, all liability for your use of the code is disclaimed.
+// This source code is governed by Apache License 2.0 that can be found in the LICENSE file.
+
 package staking
 
 import (
@@ -14,13 +19,13 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	accountutil "github.com/iotexproject/iotex-core/action/protocol/account/util"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/pkg/unit"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/testutil/testdb"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	accountutil "github.com/iotexproject/iotex-core/v2/action/protocol/account/util"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/pkg/unit"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/testutil/testdb"
 )
 
 var (
@@ -77,11 +82,18 @@ func initTestStateWithHeight(t *testing.T, ctrl *gomock.Controller, bucketCfgs [
 	)
 	require.NoError(err)
 
+	g := genesis.TestDefault()
 	// create protocol
-	p, err := NewProtocol(depositGas, &BuilderConfig{
-		Staking:                  genesis.Default.Staking,
+	p, err := NewProtocol(HelperCtx{
+		DepositGas:    depositGas,
+		BlockInterval: getBlockInterval,
+	}, &BuilderConfig{
+		Staking:                  g.Staking,
 		PersistStakingPatchBlock: math.MaxUint64,
-	}, nil, nil, genesis.Default.GreenlandBlockHeight)
+		Revise: ReviseConfig{
+			VoteWeight: g.Staking.VoteWeightCalConsts,
+		},
+	}, nil, nil, nil)
 	require.NoError(err)
 
 	// set up bucket
@@ -144,7 +156,7 @@ func initTestStateWithHeight(t *testing.T, ctrl *gomock.Controller, bucketCfgs [
 		require.NoError(csm.putCandidate(cand))
 		candidates = append(candidates, cand)
 	}
-	cfg := deepcopy.Copy(genesis.Default).(genesis.Genesis)
+	cfg := deepcopy.Copy(genesis.TestDefault()).(genesis.Genesis)
 	ctx := genesis.WithGenesisContext(context.Background(), cfg)
 	ctx = protocol.WithFeatureWithHeightCtx(ctx)
 	v, err := p.Start(ctx, sm)
@@ -417,8 +429,10 @@ func TestProtocol_HandleCandidateSelfStake(t *testing.T) {
 				sm, p, _, _ = initTestStateFromIds(test.initBucketCfgIds, test.initCandidateCfgIds)
 			}
 			require.NoError(setupAccount(sm, test.caller, test.initBalance))
-			act := action.NewCandidateActivate(nonce, test.gasLimit, test.gasPrice, test.bucketID)
+			act := action.NewCandidateActivate(test.bucketID)
 			IntrinsicGas, _ := act.IntrinsicGas()
+			elp := builder.SetNonce(nonce).SetGasLimit(test.gasLimit).
+				SetGasPrice(test.gasPrice).SetAction(act).Build()
 			ctx := protocol.WithActionCtx(context.Background(), protocol.ActionCtx{
 				Caller:       test.caller,
 				GasPrice:     test.gasPrice,
@@ -430,15 +444,16 @@ func TestProtocol_HandleCandidateSelfStake(t *testing.T) {
 				BlockTimeStamp: timeBlock,
 				GasLimit:       test.blkGasLimit,
 			})
-			cfg := deepcopy.Copy(genesis.Default).(genesis.Genesis)
+			ctx = protocol.WithBlockchainCtx(ctx, protocol.BlockchainCtx{Tip: protocol.TipInfo{}})
+			cfg := deepcopy.Copy(genesis.TestDefault()).(genesis.Genesis)
 			cfg.TsunamiBlockHeight = 1
 			ctx = genesis.WithGenesisContext(ctx, cfg)
 			ctx = protocol.WithFeatureCtx(protocol.WithFeatureWithHeightCtx(ctx))
-			require.Equal(test.err, errors.Cause(p.Validate(ctx, act, sm)))
+			require.Equal(test.err, errors.Cause(p.Validate(ctx, elp, sm)))
 			if test.err != nil {
 				return
 			}
-			r, err := p.Handle(ctx, act, sm)
+			r, err := p.Handle(ctx, elp, sm)
 			require.NoError(err)
 			if r != nil {
 				require.Equal(uint64(test.status), r.Status)
@@ -448,7 +463,7 @@ func TestProtocol_HandleCandidateSelfStake(t *testing.T) {
 
 			if test.err == nil && test.status == iotextypes.ReceiptStatus_Success {
 				// check candidate
-				csm, err := NewCandidateStateManager(sm, false)
+				csm, err := NewCandidateStateManager(sm)
 				require.NoError(err)
 				for _, expectCand := range test.expectCandidates {
 					candidate := csm.GetByOwner(expectCand.owner)
@@ -467,7 +482,7 @@ func TestProtocol_HandleCandidateSelfStake(t *testing.T) {
 				// test staker's account
 				caller, err := accountutil.LoadAccount(sm, test.caller)
 				require.NoError(err)
-				actCost, err := act.Cost()
+				actCost, err := elp.Cost()
 				require.NoError(err)
 				total := big.NewInt(0)
 				require.Equal(unit.ConvertIotxToRau(test.initBalance), total.Add(total, caller.Balance).Add(total, actCost))

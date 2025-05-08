@@ -16,12 +16,12 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/consensus/consensusfsm"
-	"github.com/iotexproject/iotex-core/state"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/testutil/testdb"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/consensus/consensusfsm"
+	"github.com/iotexproject/iotex-core/v2/state"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/testutil/testdb"
 )
 
 const (
@@ -108,7 +108,7 @@ func TestGetPutStaking(t *testing.T) {
 func TestCalculateVoteWeight(t *testing.T) {
 	// Define test cases
 	blockInterval := consensusfsm.DefaultDardanellesUpgradeConfig.BlockInterval
-	consts := genesis.Default.VoteWeightCalConsts
+	consts := genesis.TestDefault().VoteWeightCalConsts
 	tests := []struct {
 		name       string
 		consts     genesis.VoteWeightCalConsts

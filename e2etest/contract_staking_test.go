@@ -6,8 +6,10 @@ import (
 	"encoding/hex"
 	"math"
 	"math/big"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
@@ -15,30 +17,29 @@ import (
 	"github.com/iotexproject/go-pkgs/hash"
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/exp/slices"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/account"
-	accountutil "github.com/iotexproject/iotex-core/action/protocol/account/util"
-	"github.com/iotexproject/iotex-core/action/protocol/execution"
-	"github.com/iotexproject/iotex-core/action/protocol/rewarding"
-	"github.com/iotexproject/iotex-core/action/protocol/rolldpos"
-	"github.com/iotexproject/iotex-core/action/protocol/staking"
-	"github.com/iotexproject/iotex-core/actpool"
-	"github.com/iotexproject/iotex-core/blockchain"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/blockdao"
-	"github.com/iotexproject/iotex-core/blockchain/filedao"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/blockindex"
-	"github.com/iotexproject/iotex-core/blockindex/contractstaking"
-	"github.com/iotexproject/iotex-core/config"
-	"github.com/iotexproject/iotex-core/consensus/consensusfsm"
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/state/factory"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/testutil"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/account"
+	accountutil "github.com/iotexproject/iotex-core/v2/action/protocol/account/util"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/execution"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rewarding"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rolldpos"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/staking"
+	"github.com/iotexproject/iotex-core/v2/actpool"
+	"github.com/iotexproject/iotex-core/v2/blockchain"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/blockdao"
+	"github.com/iotexproject/iotex-core/v2/blockchain/filedao"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/blockindex"
+	"github.com/iotexproject/iotex-core/v2/blockindex/contractstaking"
+	"github.com/iotexproject/iotex-core/v2/config"
+	"github.com/iotexproject/iotex-core/v2/consensus/consensusfsm"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/state/factory"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/testutil"
 )
 
 const (
@@ -1273,8 +1274,8 @@ func TestContractStaking(t *testing.T) {
 	adminID := _adminID
 	ctx := context.Background()
 	cfg := config.Default
+	cfg.Genesis = genesis.TestDefault()
 	cfg.Chain.ProducerPrivKey = identityset.PrivateKey(adminID).HexString()
-	cfg.Chain.EnableTrielessStateDB = false
 	cfg.Genesis.InitBalanceMap[identityset.Address(adminID).String()] = "1000000000000000000000000000"
 
 	bc, sf, dao, ap, indexer := prepareContractStakingBlockchain(ctx, cfg, r)
@@ -1365,7 +1366,7 @@ func TestContractStaking(t *testing.T) {
 		r.EqualValues(blk.Height(), bt.CreateBlockHeight)
 		r.EqualValues(blk.Height(), bt.StakeStartBlockHeight)
 		r.True(bt.UnstakeStartBlockHeight == math.MaxUint64)
-		ctx := protocol.WithFeatureCtx(protocol.WithBlockCtx(genesis.WithGenesisContext(context.Background(), genesis.Default), protocol.BlockCtx{BlockHeight: 1}))
+		ctx := protocol.WithFeatureCtx(protocol.WithBlockCtx(genesis.WithGenesisContext(context.Background(), genesis.TestDefault()), protocol.BlockCtx{BlockHeight: 1}))
 		votes, err := indexer.CandidateVotes(ctx, identityset.Address(delegateIdx), blk.Height())
 		r.NoError(err)
 		r.EqualValues(10, votes.Int64())
@@ -1397,7 +1398,7 @@ func TestContractStaking(t *testing.T) {
 			r.NoError(err)
 			r.True(ok)
 			r.EqualValues(blk.Height(), bt.StakeStartBlockHeight)
-			ctx := protocol.WithFeatureCtx(protocol.WithBlockCtx(genesis.WithGenesisContext(context.Background(), genesis.Default), protocol.BlockCtx{BlockHeight: 1}))
+			ctx := protocol.WithFeatureCtx(protocol.WithBlockCtx(genesis.WithGenesisContext(context.Background(), genesis.TestDefault()), protocol.BlockCtx{BlockHeight: 1}))
 			votes, err := indexer.CandidateVotes(ctx, identityset.Address(delegateIdx), blk.Height())
 			r.NoError(err)
 			r.EqualValues(10, votes.Int64())
@@ -1424,7 +1425,7 @@ func TestContractStaking(t *testing.T) {
 				r.NoError(err)
 				r.True(ok)
 				r.EqualValues(blk.Height(), bt.UnstakeStartBlockHeight)
-				ctx := protocol.WithFeatureCtx(protocol.WithBlockCtx(genesis.WithGenesisContext(context.Background(), genesis.Default), protocol.BlockCtx{BlockHeight: 1}))
+				ctx := protocol.WithFeatureCtx(protocol.WithBlockCtx(genesis.WithGenesisContext(context.Background(), genesis.TestDefault()), protocol.BlockCtx{BlockHeight: 1}))
 				votes, err := indexer.CandidateVotes(ctx, identityset.Address(delegateIdx), blk.Height())
 				r.NoError(err)
 				r.EqualValues(0, votes.Int64())
@@ -1942,17 +1943,13 @@ func prepareContractStakingBlockchain(ctx context.Context, cfg config.Config, r 
 	var daoKV db.KVStore
 
 	factoryCfg := factory.GenerateConfig(cfg.Chain, cfg.Genesis)
-	if cfg.Chain.EnableTrielessStateDB {
-		if cfg.Chain.EnableStateDBCaching {
-			daoKV, err = db.CreateKVStoreWithCache(cfg.DB, cfg.Chain.TrieDBPath, cfg.Chain.StateDBCacheSize)
-		} else {
-			daoKV, err = db.CreateKVStore(cfg.DB, cfg.Chain.TrieDBPath)
-		}
-		r.NoError(err)
-		sf, err = factory.NewStateDB(factoryCfg, daoKV, factory.RegistryStateDBOption(registry))
+	if cfg.Chain.EnableStateDBCaching {
+		daoKV, err = db.CreateKVStoreWithCache(cfg.DB, cfg.Chain.TrieDBPath, cfg.Chain.StateDBCacheSize)
 	} else {
-		sf, err = factory.NewFactory(factoryCfg, db.NewMemKVStore(), factory.RegistryOption(registry))
+		daoKV, err = db.CreateKVStore(cfg.DB, cfg.Chain.TrieDBPath)
 	}
+	r.NoError(err)
+	sf, err = factory.NewStateDB(factoryCfg, daoKV, factory.RegistryStateDBOption(registry))
 	r.NoError(err)
 	ap, err := actpool.NewActPool(cfg.Genesis, sf, cfg.ActPool)
 	r.NoError(err)
@@ -1965,9 +1962,11 @@ func prepareContractStakingBlockchain(ctx context.Context, cfg config.Config, r 
 		ContractAddress:      _stakingContractAddress,
 		ContractDeployHeight: 0,
 		CalculateVoteWeight: func(v *staking.VoteBucket) *big.Int {
-			return staking.CalculateVoteWeight(genesis.Default.VoteWeightCalConsts, v, false)
+			return staking.CalculateVoteWeight(genesis.TestDefault().VoteWeightCalConsts, v, false)
 		},
-		BlockInterval: consensusfsm.DefaultDardanellesUpgradeConfig.BlockInterval,
+		BlocksToDuration: func(start, end, at uint64) time.Duration {
+			return time.Duration(end-start) * consensusfsm.DefaultDardanellesUpgradeConfig.BlockInterval
+		},
 	})
 	r.NoError(err)
 	// create BlockDAO
@@ -1993,7 +1992,7 @@ func prepareContractStakingBlockchain(ctx context.Context, cfg config.Config, r 
 	// r.NoError(reward.Register(registry))
 
 	r.NotNil(bc)
-	execution := execution.NewProtocol(dao.GetBlockHash, rewarding.DepositGasWithSGD, nil, fakeGetBlockTime)
+	execution := execution.NewProtocol(dao.GetBlockHash, rewarding.DepositGas, fakeGetBlockTime)
 	r.NoError(execution.Register(registry))
 	r.NoError(bc.Start(ctx))
 
@@ -2017,14 +2016,9 @@ func deployContracts(
 	amount := param.amount
 	gasLimit := param.gasLimit
 	gasPrice := param.gasPrice
-	exec, err := action.NewExecutionWithAccessList(action.EmptyAddress, nonce, amount, gasLimit, gasPrice, bytecode, nil)
-	r.NoError(err)
-	builder := &action.EnvelopeBuilder{}
-	elp := builder.SetAction(exec).
-		SetNonce(exec.Nonce()).
-		SetGasLimit(gasLimit).
-		SetGasPrice(gasPrice).
-		Build()
+	exec := action.NewExecution(action.EmptyAddress, amount, bytecode)
+	elp := (&action.EnvelopeBuilder{}).SetAction(exec).SetNonce(nonce).
+		SetGasLimit(gasLimit).SetGasPrice(gasPrice).Build()
 	selp, err := action.Sign(elp, sk)
 	r.NoError(err)
 	err = ap.Add(context.Background(), selp)
@@ -2082,14 +2076,9 @@ func writeContract(bc blockchain.Blockchain,
 		gasPrice := param.gasPrice
 		bytecode, err := hex.DecodeString(param.bytecode)
 		r.NoError(err)
-		exec, err := action.NewExecutionWithAccessList(param.contractAddr, nonce, amount, gasLimit, gasPrice, bytecode, nil)
-		r.NoError(err)
-		builder := &action.EnvelopeBuilder{}
-		elp := builder.SetAction(exec).
-			SetNonce(exec.Nonce()).
-			SetGasLimit(gasLimit).
-			SetGasPrice(gasPrice).
-			Build()
+		exec := action.NewExecution(param.contractAddr, amount, bytecode)
+		elp := (&action.EnvelopeBuilder{}).SetAction(exec).SetNonce(nonce).
+			SetGasLimit(gasLimit).SetGasPrice(gasPrice).Build()
 		selp, err := action.Sign(elp, sk)
 		r.NoError(err)
 		err = ap.Add(context.Background(), selp)

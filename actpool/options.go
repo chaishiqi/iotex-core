@@ -6,6 +6,7 @@
 package actpool
 
 import (
+	"errors"
 	"time"
 
 	"github.com/facebookgo/clock"
@@ -33,3 +34,20 @@ func WithTimeOut(ttl time.Duration) interface{ ActQueueOption } {
 }
 
 func (o *ttlOption) SetActQueueOption(aq *actQueue) { aq.ttl = o.ttl }
+
+// WithStore is the option to set store encode and decode functions.
+func WithStore(cfg StoreConfig, encode encodeAction, decode decodeAction) func(*actPool) error {
+	return func(a *actPool) error {
+		if encode == nil || decode == nil {
+			return errors.New("encode and decode functions must be provided")
+		}
+		store, err := newActionStore(actionStoreConfig{
+			Datadir: cfg.Datadir,
+		}, encode, decode)
+		if err != nil {
+			return err
+		}
+		a.store = store
+		return nil
+	}
+}

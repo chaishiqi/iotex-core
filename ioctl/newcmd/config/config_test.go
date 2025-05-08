@@ -13,9 +13,9 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/iotexproject/iotex-core/ioctl/config"
-	"github.com/iotexproject/iotex-core/ioctl/util"
-	"github.com/iotexproject/iotex-core/test/mock/mock_ioctlclient"
+	"github.com/iotexproject/iotex-core/v2/ioctl/config"
+	"github.com/iotexproject/iotex-core/v2/ioctl/util"
+	"github.com/iotexproject/iotex-core/v2/test/mock/mock_ioctlclient"
 )
 
 func TestNewConfigCmd(t *testing.T) {
@@ -50,17 +50,23 @@ func TestConfigGet(t *testing.T) {
 	require := require.New(t)
 	testPath := t.TempDir()
 	info := newInfo(config.Config{
-		Wallet:             testPath,
-		SecureConnect:      true,
-		Aliases:            make(map[string]string),
-		DefaultAccount:     config.Context{AddressOrAlias: "test"},
-		Explorer:           "iotexscan",
-		Language:           "English",
-		AnalyserEndpoint:   "testAnalyser",
-		WsEndpoint:         "testWsEndpoint",
-		IPFSEndpoint:       "testIPFSEndpoint",
-		IPFSGateway:        "testIPFSGateway",
-		WsRegisterContract: "testWsRegisterContract",
+		Wallet:                    testPath,
+		SecureConnect:             true,
+		Aliases:                   make(map[string]string),
+		DefaultAccount:            config.Context{AddressOrAlias: "test"},
+		Explorer:                  "iotexscan",
+		Language:                  "English",
+		AnalyserEndpoint:          "testAnalyser",
+		WsEndpoint:                "testWsEndpoint",
+		IPFSEndpoint:              "testIPFSEndpoint",
+		IPFSGateway:               "testIPFSGateway",
+		WsProjectRegisterContract: "testWsProjectRegisterContract",
+		WsProjectStoreContract:    "testWsProjectStoreContract",
+		WsFleetManagementContract: "testWsFleetManagementContract",
+		WsProverStoreContract:     "testWsProverStoreContract",
+		WsProjectDevicesContract:  "testWsProjectDevicesContract",
+		WsRouterContract:          "testWsRouterContract",
+		WsVmTypeContract:          "testWsVmTypeContract",
 	}, testPath)
 
 	tcs := []struct {
@@ -108,12 +114,32 @@ func TestConfigGet(t *testing.T) {
 			"testIPFSGateway",
 		},
 		{
-			"wsRegisterContract",
-			"testWsRegisterContract",
+			"wsProjectRegisterContract",
+			"testWsProjectRegisterContract",
+		},
+		{
+			"wsProjectStoreContract",
+			"testWsProjectStoreContract",
+		},
+		{
+			"wsFleetManagementContract",
+			"testWsFleetManagementContract",
+		},
+		{
+			"wsProverStoreContract",
+			"testWsProverStoreContract",
+		},
+		{
+			"wsRouterContract",
+			"testWsRouterContract",
+		},
+		{
+			"wsVmTypeContract",
+			"testWsVmTypeContract",
 		},
 		{
 			"all",
-			"\"endpoint\": \"\",\n  \"secureConnect\": true,\n  \"aliases\": {},\n  \"defaultAccount\": {\n    \"addressOrAlias\": \"test\"\n  },\n  \"explorer\": \"iotexscan\",\n  \"language\": \"English\",\n  \"nsv2height\": 0,\n  \"analyserEndpoint\": \"testAnalyser\",\n  \"wsEndpoint\": \"testWsEndpoint\",\n  \"ipfsEndpoint\": \"testIPFSEndpoint\",\n  \"ipfsGateway\": \"testIPFSGateway\",\n  \"wsRegisterContract\": \"testWsRegisterContract\"\n}",
+			"  \"endpoint\": \"\",\n  \"secureConnect\": true,\n  \"aliases\": {},\n  \"defaultAccount\": {\n    \"addressOrAlias\": \"test\"\n  },\n  \"explorer\": \"iotexscan\",\n  \"language\": \"English\",\n  \"nsv2height\": 0,\n  \"analyserEndpoint\": \"testAnalyser\",\n  \"wsEndpoint\": \"testWsEndpoint\",\n  \"ipfsEndpoint\": \"testIPFSEndpoint\",\n  \"ipfsGateway\": \"testIPFSGateway\",\n  \"wsProjectRegisterContract\": \"testWsProjectRegisterContract\",\n  \"wsProjectStoreContract\": \"testWsProjectStoreContract\",\n  \"wsFleetManagementContract\": \"testWsFleetManagementContract\",\n  \"wsProverStoreContract\": \"testWsProverStoreContract\",\n  \"wsProjectDevicesContract\": \"testWsProjectDevicesContract\",\n  \"wsRouterContract\": \"testWsRouterContract\",\n  \"wsVmTypeContract\": \"testWsVmTypeContract\",\n  \"ioidProjectRegisterContract\": \"\",\n  \"ioidProjectStoreContract\": \"\"\n}",
 		},
 	}
 
@@ -133,17 +159,23 @@ func TestConfigReset(t *testing.T) {
 	cfgFile := fmt.Sprintf("%s/%s", cfgDir, "config.test")
 
 	info := newInfo(config.Config{
-		Wallet:             "wallet",
-		Endpoint:           "testEndpoint",
-		SecureConnect:      false,
-		DefaultAccount:     config.Context{AddressOrAlias: ""},
-		Explorer:           "explorer",
-		Language:           "Croatian",
-		AnalyserEndpoint:   "testAnalyser",
-		WsEndpoint:         "testWsEndpoint",
-		IPFSEndpoint:       "testIPFSEndpoint",
-		IPFSGateway:        "testIPFSGateway",
-		WsRegisterContract: "testWsRegisterContract",
+		Wallet:                    "wallet",
+		Endpoint:                  "testEndpoint",
+		SecureConnect:             false,
+		DefaultAccount:            config.Context{AddressOrAlias: ""},
+		Explorer:                  "explorer",
+		Language:                  "Croatian",
+		AnalyserEndpoint:          "testAnalyser",
+		WsEndpoint:                "testWsEndpoint",
+		IPFSEndpoint:              "testIPFSEndpoint",
+		IPFSGateway:               "testIPFSGateway",
+		WsProjectRegisterContract: "testWsProjectRegisterContract",
+		WsProjectStoreContract:    "testWsProjectStoreContract",
+		WsFleetManagementContract: "testWsFleetManagementContract",
+		WsProverStoreContract:     "testWsProverStoreContract",
+		WsProjectDevicesContract:  "testWsProjectDevicesContract",
+		WsRouterContract:          "testWsRouterContract",
+		WsVmTypeContract:          "testWsVmTypeContract",
 	}, cfgFile)
 
 	// write the config to the temp dir and then reset
@@ -161,7 +193,13 @@ func TestConfigReset(t *testing.T) {
 	require.Equal("testWsEndpoint", cfg.WsEndpoint)
 	require.Equal("testIPFSEndpoint", cfg.IPFSEndpoint)
 	require.Equal("testIPFSGateway", cfg.IPFSGateway)
-	require.Equal("testWsRegisterContract", cfg.WsRegisterContract)
+	require.Equal("testWsProjectRegisterContract", cfg.WsProjectRegisterContract)
+	require.Equal("testWsProjectStoreContract", cfg.WsProjectStoreContract)
+	require.Equal("testWsFleetManagementContract", cfg.WsFleetManagementContract)
+	require.Equal("testWsProverStoreContract", cfg.WsProverStoreContract)
+	require.Equal("testWsProjectDevicesContract", cfg.WsProjectDevicesContract)
+	require.Equal("testWsRouterContract", cfg.WsRouterContract)
+	require.Equal("testWsVmTypeContract", cfg.WsVmTypeContract)
 
 	require.NoError(info.reset())
 	require.NoError(info.loadConfig())
@@ -176,7 +214,13 @@ func TestConfigReset(t *testing.T) {
 	require.Equal(_defaultWsEndpoint, resetCfg.WsEndpoint)
 	require.Equal(_defaultIPFSEndpoint, resetCfg.IPFSEndpoint)
 	require.Equal(_defaultIPFSGateway, resetCfg.IPFSGateway)
-	require.Equal(_defaultWsRegisterContract, resetCfg.WsRegisterContract)
+	require.Equal(_defaultWsProjectRegisterContract, resetCfg.WsProjectRegisterContract)
+	require.Equal(_defaultWsProjectStoreContract, resetCfg.WsProjectStoreContract)
+	require.Equal(_defaultWsFleetManagementContract, resetCfg.WsFleetManagementContract)
+	require.Equal(_defaultWsProverStoreContract, resetCfg.WsProverStoreContract)
+	require.Equal(_defaultWsProjectDevicesContract, resetCfg.WsProjectDevicesContract)
+	require.Equal(_defaultWsRouterContract, resetCfg.WsRouterContract)
+	require.Equal(_defaultWsVmTypeContract, resetCfg.WsVmTypeContract)
 	require.Equal("iotexscan", resetCfg.Explorer)
 	require.Equal(*new(config.Context), resetCfg.DefaultAccount)
 }
@@ -260,8 +304,28 @@ func TestConfigSet(t *testing.T) {
 			"testIPFSGateway",
 		},
 		{
-			[]string{"wsRegisterContract", "testWsRegisterContract"},
-			"testWsRegisterContract",
+			[]string{"wsProjectRegisterContract", "testWsProjectRegisterContract"},
+			"testWsProjectRegisterContract",
+		},
+		{
+			[]string{"wsProjectStoreContract", "testWsProjectStoreContract"},
+			"testWsProjectStoreContract",
+		},
+		{
+			[]string{"wsFleetManagementContract", "testWsFleetManagementContract"},
+			"testWsFleetManagementContract",
+		},
+		{
+			[]string{"wsProverStoreContract", "testWsProverStoreContract"},
+			"testWsProverStoreContract",
+		},
+		{
+			[]string{"wsRouterContract", "testWsRouterContract"},
+			"testWsRouterContract",
+		},
+		{
+			[]string{"wsVmTypeContract", "testWsVmTypeContract"},
+			"testWsVmTypeContract",
 		},
 	}
 

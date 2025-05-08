@@ -16,11 +16,12 @@ import (
 
 	"github.com/iotexproject/iotex-address/address"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/state"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/testutil"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/state"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/testutil"
 )
 
 func TestValidator(t *testing.T) {
@@ -61,6 +62,8 @@ func TestValidator(t *testing.T) {
 	require.NoError(err)
 
 	v = NewValidator(nil, valid)
+	ctx = protocol.WithFeatureCtx(protocol.WithBlockCtx(genesis.WithGenesisContext(ctx, genesis.TestDefault()),
+		protocol.BlockCtx{BlockHeight: 1}))
 	require.Contains(v.Validate(ctx, &nblk).Error(), "MockChainManager nonce error")
 
 }

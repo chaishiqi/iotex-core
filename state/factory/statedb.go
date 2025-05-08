@@ -1,4 +1,4 @@
-// Copyright (c) 2020 IoTeX Foundation
+// Copyright (c) 2024 IoTeX Foundation
 // This source code is provided 'as is' and no warranties are given as to title or non-infringement, merchantability
 // or fitness for purpose and, to the extent permitted by law, all liability for your use of the code is disclaimed.
 // This source code is governed by Apache License 2.0 that can be found in the LICENSE file.
@@ -16,38 +16,46 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/iotexproject/go-pkgs/cache"
+	"github.com/iotexproject/go-pkgs/crypto"
 	"github.com/iotexproject/go-pkgs/hash"
-	"github.com/iotexproject/iotex-address/address"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/execution/evm"
-	"github.com/iotexproject/iotex-core/action/protocol/staking"
-	"github.com/iotexproject/iotex-core/actpool"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/db/batch"
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/pkg/prometheustimer"
-	"github.com/iotexproject/iotex-core/pkg/tracer"
-	"github.com/iotexproject/iotex-core/pkg/util/byteutil"
-	"github.com/iotexproject/iotex-core/state"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/execution/evm"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/staking"
+	"github.com/iotexproject/iotex-core/v2/actpool"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/db/batch"
+	"github.com/iotexproject/iotex-core/v2/pkg/lifecycle"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/pkg/prometheustimer"
+	"github.com/iotexproject/iotex-core/v2/state"
 )
 
-// stateDB implements StateFactory interface, tracks changes to account/contract and batch-commits to DB
-type stateDB struct {
-	mutex                    sync.RWMutex
-	currentChainHeight       uint64
-	cfg                      Config
-	registry                 *protocol.Registry
-	dao                      db.KVStore // the underlying DB for account/contract storage
-	timerFactory             *prometheustimer.TimerFactory
-	workingsets              cache.LRUCache // lru cache for workingsets
-	protocolView             protocol.View
-	skipBlockValidationOnPut bool
-	ps                       *patchStore
-}
+type (
+	// daoRetrofitter represents the DAO-related methods to accommodate archive-mode
+	daoRetrofitter interface {
+		lifecycle.StartStopper
+		atHeight(uint64) db.KVStore
+		getHeight() (uint64, error)
+		putHeight(uint64) error
+	}
+	// stateDB implements StateFactory interface, tracks changes to account/contract and batch-commits to DB
+	stateDB struct {
+		mutex                    sync.RWMutex
+		currentChainHeight       uint64
+		cfg                      Config
+		registry                 *protocol.Registry
+		dao                      daoRetrofitter
+		timerFactory             *prometheustimer.TimerFactory
+		workingsets              cache.LRUCache // lru cache for workingsets
+		protocolView             *protocol.Views
+		skipBlockValidationOnPut bool
+		ps                       *patchStore
+	}
+)
 
 // StateDBOption sets stateDB construction parameter
 type StateDBOption func(*stateDB, *Config) error
@@ -90,9 +98,8 @@ func NewStateDB(cfg Config, dao db.KVStore, opts ...StateDBOption) (Factory, err
 		cfg:                cfg,
 		currentChainHeight: 0,
 		registry:           protocol.NewRegistry(),
-		protocolView:       protocol.View{},
+		protocolView:       &protocol.Views{},
 		workingsets:        cache.NewThreadSafeLruCache(int(cfg.Chain.WorkingSetCacheSize)),
-		dao:                dao,
 	}
 	for _, opt := range opts {
 		if err := opt(&sdb, &cfg); err != nil {
@@ -100,6 +107,7 @@ func NewStateDB(cfg Config, dao db.KVStore, opts ...StateDBOption) (Factory, err
 			return nil, err
 		}
 	}
+	sdb.dao = newDaoRetrofitter(dao)
 	timerFactory, err := prometheustimer.New(
 		"iotex_statefactory_perf",
 		"Performance of state factory module",
@@ -119,17 +127,17 @@ func (sdb *stateDB) Start(ctx context.Context) error {
 		return err
 	}
 	// check factory height
-	h, err := sdb.dao.Get(AccountKVNamespace, []byte(CurrentHeightKey))
+	h, err := sdb.dao.getHeight()
 	switch errors.Cause(err) {
 	case nil:
-		sdb.currentChainHeight = byteutil.BytesToUint64(h)
+		sdb.currentChainHeight = h
 		// start all protocols
 		if sdb.protocolView, err = sdb.registry.StartAll(ctx, sdb); err != nil {
 			return err
 		}
 	case db.ErrNotExist:
 		sdb.currentChainHeight = 0
-		if err = sdb.dao.Put(AccountKVNamespace, []byte(CurrentHeightKey), byteutil.Uint64ToBytes(0)); err != nil {
+		if err = sdb.dao.putHeight(0); err != nil {
 			return errors.Wrap(err, "failed to init statedb's height")
 		}
 		// start all protocols
@@ -141,7 +149,6 @@ func (sdb *stateDB) Start(ctx context.Context) error {
 			protocol.BlockCtx{
 				BlockHeight:    0,
 				BlockTimeStamp: time.Unix(sdb.cfg.Genesis.Timestamp, 0),
-				Producer:       sdb.cfg.Chain.ProducerAddress(),
 				GasLimit:       sdb.cfg.Genesis.BlockGasLimitByHeight(0),
 			})
 		ctx = protocol.WithFeatureCtx(ctx)
@@ -152,7 +159,6 @@ func (sdb *stateDB) Start(ctx context.Context) error {
 	default:
 		return err
 	}
-
 	return nil
 }
 
@@ -167,17 +173,40 @@ func (sdb *stateDB) Stop(ctx context.Context) error {
 func (sdb *stateDB) Height() (uint64, error) {
 	sdb.mutex.RLock()
 	defer sdb.mutex.RUnlock()
-	height, err := sdb.dao.Get(AccountKVNamespace, []byte(CurrentHeightKey))
-	if err != nil {
-		return 0, errors.Wrap(err, "failed to get factory's height from underlying DB")
-	}
-	return byteutil.BytesToUint64(height), nil
+	return sdb.dao.getHeight()
+}
+
+func (sdb *stateDB) newReadOnlyWorkingSet(ctx context.Context, height uint64) (*workingSet, error) {
+	return sdb.newWorkingSetWithKVStore(ctx, height, &readOnlyKV{sdb.dao.atHeight(height)})
 }
 
 func (sdb *stateDB) newWorkingSet(ctx context.Context, height uint64) (*workingSet, error) {
+	return sdb.newWorkingSetWithKVStore(ctx, height, sdb.dao.atHeight(height))
+}
+
+func (sdb *stateDB) newWorkingSetWithKVStore(ctx context.Context, height uint64, kvstore db.KVStore) (*workingSet, error) {
+	store, err := sdb.createWorkingSetStore(ctx, height, kvstore)
+	if err != nil {
+		return nil, err
+	}
+	if err := store.Start(ctx); err != nil {
+		return nil, err
+	}
+	views := sdb.protocolView.Clone()
+	if err := views.Commit(ctx, sdb); err != nil {
+		return nil, err
+	}
+	return newWorkingSet(height, views, store, sdb), nil
+}
+
+func (sdb *stateDB) CreateWorkingSetStore(ctx context.Context, height uint64, kvstore db.KVStore) (workingSetStore, error) {
+	return sdb.createWorkingSetStore(ctx, height, kvstore)
+}
+
+func (sdb *stateDB) createWorkingSetStore(ctx context.Context, height uint64, kvstore db.KVStore) (workingSetStore, error) {
 	g := genesis.MustExtractGenesisContext(ctx)
 	flusher, err := db.NewKVStoreFlusher(
-		sdb.dao,
+		kvstore,
 		batch.NewCachedBatch(),
 		sdb.flusherOptions(!g.IsEaster(height))...,
 	)
@@ -191,12 +220,7 @@ func (sdb *stateDB) newWorkingSet(ctx context.Context, height uint64) (*workingS
 			flusher.KVStoreWithBuffer().MustPut(p.Namespace, p.Key, p.Value)
 		}
 	}
-	store := newStateDBWorkingSetStore(sdb.protocolView, flusher, g.IsNewfoundland(height))
-	if err := store.Start(ctx); err != nil {
-		return nil, err
-	}
-
-	return newWorkingSet(height, store), nil
+	return newStateDBWorkingSetStore(flusher, g.IsNewfoundland(height)), nil
 }
 
 func (sdb *stateDB) Register(p protocol.Protocol) error {
@@ -205,8 +229,8 @@ func (sdb *stateDB) Register(p protocol.Protocol) error {
 
 func (sdb *stateDB) Validate(ctx context.Context, blk *block.Block) error {
 	ctx = protocol.WithRegistry(ctx, sdb.registry)
-	key := generateWorkingSetCacheKey(blk.Header, blk.Header.ProducerAddress())
-	ws, isExist, err := sdb.getFromWorkingSets(ctx, key)
+	blkHash := blk.HashBlock()
+	ws, isExist, err := sdb.getFromWorkingSets(ctx, blkHash)
 	if err != nil {
 		return err
 	}
@@ -214,7 +238,7 @@ func (sdb *stateDB) Validate(ctx context.Context, blk *block.Block) error {
 		if err = ws.ValidateBlock(ctx, blk); err != nil {
 			return errors.Wrap(err, "failed to validate block with workingset in statedb")
 		}
-		sdb.workingsets.Add(key, ws)
+		sdb.workingsets.Add(blkHash, ws)
 	}
 	receipts, err := ws.Receipts()
 	if err != nil {
@@ -224,74 +248,74 @@ func (sdb *stateDB) Validate(ctx context.Context, blk *block.Block) error {
 	return nil
 }
 
-// NewBlockBuilder returns block builder which hasn't been signed yet
-func (sdb *stateDB) NewBlockBuilder(
+// Mint mints a block
+func (sdb *stateDB) Mint(
 	ctx context.Context,
 	ap actpool.ActPool,
-	sign func(action.Envelope) (*action.SealedEnvelope, error),
-) (*block.Builder, error) {
+	pk crypto.PrivateKey,
+) (*block.Block, error) {
+	bcCtx := protocol.MustGetBlockchainCtx(ctx)
+	expectedBlockHeight := bcCtx.Tip.Height + 1
 	ctx = protocol.WithRegistry(ctx, sdb.registry)
+	var (
+		ws  *workingSet
+		err error
+	)
 	sdb.mutex.RLock()
 	currHeight := sdb.currentChainHeight
 	sdb.mutex.RUnlock()
-	ws, err := sdb.newWorkingSet(ctx, currHeight+1)
-	if err != nil {
-		return nil, err
-	}
-	postSystemActions := make([]*action.SealedEnvelope, 0)
-	unsignedSystemActions, err := ws.generateSystemActions(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for _, elp := range unsignedSystemActions {
-		se, err := sign(elp)
-		if err != nil {
-			return nil, err
+	switch {
+	case currHeight+1 < expectedBlockHeight:
+		parent, ok := sdb.workingsets.Get(bcCtx.Tip.Hash)
+		if !ok {
+			return nil, errors.Wrapf(ErrNotSupported, "failed to create block at height %d, current height is %d", expectedBlockHeight, sdb.currentChainHeight)
 		}
-		postSystemActions = append(postSystemActions, se)
+		ws, err = parent.(*workingSet).NewWorkingSet(ctx)
+	case currHeight+1 > expectedBlockHeight:
+		return nil, errors.Wrapf(ErrNotSupported, "cannot create block at height %d, current height is %d", expectedBlockHeight, sdb.currentChainHeight)
+	default:
+		ws, err = sdb.newWorkingSet(ctx, currHeight+1)
 	}
-	blkBuilder, err := ws.CreateBuilder(ctx, ap, postSystemActions, sdb.cfg.Chain.AllowedBlockGasResidue)
+	if err != nil {
+		return nil, err
+	}
+	sign := func(elp action.Envelope) (*action.SealedEnvelope, error) {
+		return action.Sign(elp, pk)
+	}
+	blkBuilder, err := ws.CreateBuilder(ctx, ap, sign, sdb.cfg.Chain.AllowedBlockGasResidue)
 	if err != nil {
 		return nil, err
 	}
 
-	blkCtx := protocol.MustGetBlockCtx(ctx)
-	key := generateWorkingSetCacheKey(blkBuilder.GetCurrentBlockHeader(), blkCtx.Producer.String())
-	sdb.workingsets.Add(key, ws)
-	return blkBuilder, nil
+	blk, err := blkBuilder.SignAndBuild(pk)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to create block builder at new block height %d", expectedBlockHeight)
+	}
+	sdb.workingsets.Add(blk.HashBlock(), ws)
+	return &blk, nil
 }
 
-// SimulateExecution simulates a running of smart contract operation, this is done off the network since it does not
-// cause any state change
-func (sdb *stateDB) SimulateExecution(
-	ctx context.Context,
-	caller address.Address,
-	ex *action.Execution,
-) ([]byte, *action.Receipt, error) {
-	ctx, span := tracer.NewSpan(ctx, "stateDB.SimulateExecution")
-	defer span.End()
-
+func (sdb *stateDB) WorkingSet(ctx context.Context) (protocol.StateManager, error) {
 	sdb.mutex.RLock()
-	currHeight := sdb.currentChainHeight
+	height := sdb.currentChainHeight
 	sdb.mutex.RUnlock()
-	ws, err := sdb.newWorkingSet(ctx, currHeight+1)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return evm.SimulateExecution(ctx, ws, caller, ex)
+	return sdb.newReadOnlyWorkingSet(ctx, height+1)
 }
 
-// ReadContractStorage reads contract's storage
-func (sdb *stateDB) ReadContractStorage(ctx context.Context, contract address.Address, key []byte) ([]byte, error) {
-	sdb.mutex.RLock()
-	currHeight := sdb.currentChainHeight
-	sdb.mutex.RUnlock()
-	ws, err := sdb.newWorkingSet(ctx, currHeight+1)
+func (sdb *stateDB) WorkingSetAtHeight(ctx context.Context, height uint64, preacts ...*action.SealedEnvelope) (protocol.StateManager, error) {
+	ws, err := sdb.newReadOnlyWorkingSet(ctx, height)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to generate working set from state db")
+		return nil, errors.Wrap(err, "failed to obtain working set from state db")
 	}
-	return evm.ReadContractStorage(ctx, ws, contract, key)
+	if len(preacts) == 0 {
+		return ws, nil
+	}
+	// prepare workingset at height, and run acts
+	ws.height++
+	if err := ws.Process(ctx, preacts); err != nil {
+		return nil, err
+	}
+	return ws, nil
 }
 
 // PutBlock persists all changes in RunActions() into the DB
@@ -304,19 +328,8 @@ func (sdb *stateDB) PutBlock(ctx context.Context, blk *block.Block) error {
 	if producer == nil {
 		return errors.New("failed to get address")
 	}
-	g := genesis.MustExtractGenesisContext(ctx)
-	ctx = protocol.WithBlockCtx(
-		protocol.WithRegistry(ctx, sdb.registry),
-		protocol.BlockCtx{
-			BlockHeight:    blk.Height(),
-			BlockTimeStamp: blk.Timestamp(),
-			GasLimit:       g.BlockGasLimitByHeight(blk.Height()),
-			Producer:       producer,
-		},
-	)
-	ctx = protocol.WithFeatureCtx(ctx)
-	key := generateWorkingSetCacheKey(blk.Header, blk.Header.ProducerAddress())
-	ws, isExist, err := sdb.getFromWorkingSets(ctx, key)
+	ctx = protocol.WithRegistry(ctx, sdb.registry)
+	ws, isExist, err := sdb.getFromWorkingSets(ctx, blk.HashBlock())
 	if err != nil {
 		return err
 	}
@@ -350,12 +363,9 @@ func (sdb *stateDB) PutBlock(ctx context.Context, blk *block.Block) error {
 	if err := ws.Commit(ctx); err != nil {
 		return err
 	}
+	sdb.protocolView = ws.views
 	sdb.currentChainHeight = h
 	return nil
-}
-
-func (sdb *stateDB) DeleteTipBlock(_ context.Context, _ *block.Block) error {
-	return errors.Wrap(ErrNotSupported, "cannot delete tip block from state db")
 }
 
 // State returns a confirmed state in the state factory
@@ -369,10 +379,10 @@ func (sdb *stateDB) State(s interface{}, opts ...protocol.StateOption) (uint64, 
 	if cfg.Keys != nil {
 		return 0, errors.Wrap(ErrNotSupported, "Read state with keys option has not been implemented yet")
 	}
-	return sdb.currentChainHeight, sdb.state(cfg.Namespace, cfg.Key, s)
+	return sdb.currentChainHeight, sdb.state(sdb.currentChainHeight, cfg.Namespace, cfg.Key, s)
 }
 
-// State returns a set of states in the state factory
+// States returns a set of states in the state factory
 func (sdb *stateDB) States(opts ...protocol.StateOption) (uint64, state.Iterator, error) {
 	cfg, err := processOptions(opts...)
 	if err != nil {
@@ -383,27 +393,40 @@ func (sdb *stateDB) States(opts ...protocol.StateOption) (uint64, state.Iterator
 	if cfg.Key != nil {
 		return sdb.currentChainHeight, nil, errors.Wrap(ErrNotSupported, "Read states with key option has not been implemented yet")
 	}
-	values, err := readStates(sdb.dao, cfg.Namespace, cfg.Keys)
+	keys, values, err := readStates(sdb.dao.atHeight(sdb.currentChainHeight), cfg.Namespace, cfg.Keys)
+	if err != nil {
+		return 0, nil, err
+	}
+	iter, err := state.NewIterator(keys, values)
 	if err != nil {
 		return 0, nil, err
 	}
 
-	return sdb.currentChainHeight, state.NewIterator(values), nil
-}
-
-// StateAtHeight returns a confirmed state at height -- archive mode
-func (sdb *stateDB) StateAtHeight(height uint64, s interface{}, opts ...protocol.StateOption) error {
-	return ErrNotSupported
-}
-
-// StatesAtHeight returns a set states in the state factory at height -- archive mode
-func (sdb *stateDB) StatesAtHeight(height uint64, opts ...protocol.StateOption) (state.Iterator, error) {
-	return nil, errors.Wrap(ErrNotSupported, "state db does not support archive mode")
+	return sdb.currentChainHeight, iter, nil
 }
 
 // ReadView reads the view
-func (sdb *stateDB) ReadView(name string) (interface{}, error) {
+func (sdb *stateDB) ReadView(name string) (protocol.View, error) {
 	return sdb.protocolView.Read(name)
+}
+
+// StateReaderAt returns a state reader at a specific height
+func (sdb *stateDB) StateReaderAt(blkHeight uint64, blkHash hash.Hash256) (protocol.StateReader, error) {
+	sdb.mutex.RLock()
+	curHeight := sdb.currentChainHeight
+	sdb.mutex.RUnlock()
+	if blkHeight == curHeight {
+		return sdb, nil
+	} else if blkHeight < curHeight {
+		return nil, errors.Errorf("cannot read state at height %d, current height is %d", blkHeight, curHeight)
+	}
+	if data, ok := sdb.workingsets.Get(blkHash); ok {
+		if ws, ok := data.(*workingSet); ok {
+			return ws, nil
+		}
+		return nil, errors.New("type assertion failed to be WorkingSet")
+	}
+	return nil, errors.Errorf("failed to get workingset at %x", blkHash)
 }
 
 //======================================
@@ -430,8 +453,8 @@ func (sdb *stateDB) flusherOptions(preEaster bool) []db.KVStoreFlusherOption {
 	)
 }
 
-func (sdb *stateDB) state(ns string, addr []byte, s interface{}) error {
-	data, err := sdb.dao.Get(ns, addr)
+func (sdb *stateDB) state(h uint64, ns string, addr []byte, s interface{}) error {
+	data, err := sdb.dao.atHeight(h).Get(ns, addr)
 	if err != nil {
 		if errors.Cause(err) == db.ErrNotExist {
 			return errors.Wrapf(state.ErrStateNotExist, "state of %x doesn't exist", addr)
@@ -453,7 +476,11 @@ func (sdb *stateDB) createGenesisStates(ctx context.Context) error {
 		return err
 	}
 
-	return ws.Commit(ctx)
+	if err := ws.Commit(ctx); err != nil {
+		return err
+	}
+	sdb.protocolView = ws.views
+	return nil
 }
 
 // getFromWorkingSets returns (workingset, true) if it exists in a cache, otherwise generates new workingset and return (ws, false)

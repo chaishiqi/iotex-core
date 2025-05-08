@@ -1,4 +1,4 @@
-// Copyright (c) 2022 IoTeX Foundation
+// Copyright (c) 2024 IoTeX Foundation
 // This source code is provided 'as is' and no warranties are given as to title or non-infringement, merchantability
 // or fitness for purpose and, to the extent permitted by law, all liability for your use of the code is disclaimed.
 // This source code is governed by Apache License 2.0 that can be found in the LICENSE file.
@@ -7,8 +7,12 @@ package factory
 
 import (
 	"context"
+	"math/big"
 	"sort"
+	"time"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/iotexproject/go-pkgs/hash"
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 	"github.com/pkg/errors"
@@ -17,15 +21,17 @@ import (
 
 	"github.com/iotexproject/iotex-address/address"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	accountutil "github.com/iotexproject/iotex-core/action/protocol/account/util"
-	"github.com/iotexproject/iotex-core/actpool"
-	"github.com/iotexproject/iotex-core/actpool/actioniterator"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/state"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	accountutil "github.com/iotexproject/iotex-core/v2/action/protocol/account/util"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rewarding"
+	"github.com/iotexproject/iotex-core/v2/actpool"
+	"github.com/iotexproject/iotex-core/v2/actpool/actioniterator"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/state"
 )
 
 var (
@@ -36,30 +42,49 @@ var (
 		},
 		[]string{"type"},
 	)
+	_mintAbility = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "iotex_mint_ability",
+			Help: "IoTeX Mint Ability",
+		},
+		[]string{"type"},
+	)
 
 	errInvalidSystemActionLayout = errors.New("system action layout is invalid")
+	errUnfoldTxContainer         = errors.New("failed to unfold tx container")
+	errDeployerNotWhitelisted    = errors.New("deployer not whitelisted")
 )
 
 func init() {
 	prometheus.MustRegister(_stateDBMtc)
+	prometheus.MustRegister(_mintAbility)
 }
 
 type (
+	// WorkingSetStoreFactory is the factory to create working set store
+	WorkingSetStoreFactory interface {
+		CreateWorkingSetStore(context.Context, uint64, db.KVStore) (workingSetStore, error)
+	}
 	workingSet struct {
-		height    uint64
-		store     workingSetStore
-		finalized bool
-		dock      protocol.Dock
-		receipts  []*action.Receipt
+		workingSetStoreFactory WorkingSetStoreFactory
+		height                 uint64
+		views                  *protocol.Views
+		store                  workingSetStore
+		finalized              bool
+		txValidator            *protocol.GenericValidator
+		receipts               []*action.Receipt
 	}
 )
 
-func newWorkingSet(height uint64, store workingSetStore) *workingSet {
-	return &workingSet{
-		height: height,
-		store:  store,
-		dock:   protocol.NewDock(),
+func newWorkingSet(height uint64, views *protocol.Views, store workingSetStore, storeFactory WorkingSetStoreFactory) *workingSet {
+	ws := &workingSet{
+		height:                 height,
+		views:                  views,
+		store:                  store,
+		workingSetStoreFactory: storeFactory,
 	}
+	ws.txValidator = protocol.NewGenericValidator(ws, accountutil.AccountState)
+	return ws
 }
 
 func (ws *workingSet) digest() (hash.Hash256, error) {
@@ -94,29 +119,6 @@ func (ws *workingSet) validate(ctx context.Context) error {
 		)
 	}
 	return nil
-}
-
-func (ws *workingSet) runActions(
-	ctx context.Context,
-	elps []*action.SealedEnvelope,
-) ([]*action.Receipt, error) {
-	// Handle actions
-	receipts := make([]*action.Receipt, 0)
-	for _, elp := range elps {
-		ctxWithActionContext, err := withActionCtx(ctx, elp)
-		if err != nil {
-			return nil, err
-		}
-		receipt, err := ws.runAction(ctxWithActionContext, elp)
-		if err != nil {
-			return nil, errors.Wrap(err, "error when run action")
-		}
-		receipts = append(receipts, receipt)
-	}
-	if protocol.MustGetFeatureCtx(ctx).CorrectTxLogIndex {
-		updateReceiptIndex(receipts)
-	}
-	return receipts, nil
 }
 
 func withActionCtx(ctx context.Context, selp *action.SealedEnvelope) (context.Context, error) {
@@ -156,10 +158,14 @@ func (ws *workingSet) runAction(
 			return nil, err
 		}
 	}
+	// verify the tx is not container format (unfolded correctly)
+	if selp.Encoding() == uint32(iotextypes.Encoding_TX_CONTAINER) {
+		return nil, errors.Wrap(action.ErrInvalidAct, "cannot run tx container without unfolding")
+	}
 	// for replay tx, check against deployer whitelist
 	g := genesis.MustExtractGenesisContext(ctx)
-	if selp.Encoding() == uint32(iotextypes.Encoding_ETHEREUM_UNPROTECTED) && !g.IsDeployerWhitelisted(selp.SenderAddress()) {
-		return nil, errors.Errorf("replay deployer %v not whitelisted", selp.SenderAddress().String())
+	if !selp.Protected() && !g.IsDeployerWhitelisted(selp.SenderAddress()) {
+		return nil, errors.Wrap(errDeployerNotWhitelisted, selp.SenderAddress().String())
 	}
 	// Handle action
 	reg, ok := protocol.GetRegistry(ctx)
@@ -174,8 +180,9 @@ func (ws *workingSet) runAction(
 	if err := ws.freshAccountConversion(ctx, &actCtx); err != nil {
 		return nil, err
 	}
+	fCtx := protocol.MustGetFeatureCtx(ctx)
 	for _, actionHandler := range reg.All() {
-		receipt, err := actionHandler.Handle(ctx, selp.Action(), ws)
+		receipt, err := actionHandler.Handle(ctx, selp.Envelope, ws)
 		if err != nil {
 			return nil, errors.Wrapf(
 				err,
@@ -184,10 +191,28 @@ func (ws *workingSet) runAction(
 			)
 		}
 		if receipt != nil {
+			if fCtx.EnableBlobTransaction && len(selp.BlobHashes()) > 0 {
+				if err = ws.handleBlob(ctx, selp, receipt); err != nil {
+					return nil, err
+				}
+			}
 			return receipt, nil
 		}
 	}
 	return nil, errors.New("receipt is empty")
+}
+
+func (ws *workingSet) handleBlob(ctx context.Context, act *action.SealedEnvelope, receipt *action.Receipt) error {
+	// Deposit blob fee
+	receipt.BlobGasUsed = act.BlobGas()
+	receipt.BlobGasPrice = protocol.CalcBlobFee(protocol.MustGetBlockchainCtx(ctx).Tip.ExcessBlobGas)
+	blobFee := new(big.Int).Mul(receipt.BlobGasPrice, new(big.Int).SetUint64(receipt.BlobGasUsed))
+	logs, err := rewarding.DepositGas(ctx, ws, new(big.Int), protocol.BlobGasFeeOption(blobFee))
+	if err != nil {
+		return err
+	}
+	receipt.AddTransactionLogs(logs...)
+	return nil
 }
 
 func validateChainID(ctx context.Context, chainID uint32) error {
@@ -200,6 +225,27 @@ func validateChainID(ctx context.Context, chainID uint32) error {
 		return errors.Wrapf(action.ErrChainID, "expecting %d, got %d", blkChainCtx.ChainID, chainID)
 	}
 	return nil
+}
+
+func (ws *workingSet) checkContract(ctx context.Context, to *common.Address) (bool, bool, bool, error) {
+	if to == nil {
+		return true, false, false, nil
+	}
+	var (
+		addr, _ = address.FromBytes(to.Bytes())
+		ioAddr  = addr.String()
+	)
+	if ioAddr == address.StakingProtocolAddr {
+		return false, true, false, nil
+	}
+	if ioAddr == address.RewardingProtocol {
+		return false, false, true, nil
+	}
+	sender, err := accountutil.AccountState(ctx, ws, addr)
+	if err != nil {
+		return false, false, false, errors.Wrapf(err, "failed to get account of %s", to.Hex())
+	}
+	return sender.IsContract(), false, false, nil
 }
 
 func (ws *workingSet) finalize() error {
@@ -230,8 +276,8 @@ func (ws *workingSet) ResetSnapshots() {
 // and RefactorFreshAccountConversion height
 func (ws *workingSet) freshAccountConversion(ctx context.Context, actCtx *protocol.ActionCtx) error {
 	// check legacy fresh account conversion
-	if protocol.MustGetFeatureCtx(ctx).UseZeroNonceForFreshAccount &&
-		!protocol.MustGetFeatureCtx(ctx).RefactorFreshAccountConversion {
+	fCtx := protocol.MustGetFeatureCtx(ctx)
+	if fCtx.UseZeroNonceForFreshAccount && !fCtx.RefactorFreshAccountConversion {
 		sender, err := accountutil.AccountState(ctx, ws, actCtx.Caller)
 		if err != nil {
 			return errors.Wrapf(err, "failed to get the confirmed nonce of sender %s", actCtx.Caller.String())
@@ -257,7 +303,6 @@ func (ws *workingSet) Commit(ctx context.Context) error {
 		// TODO (zhi): wrap the error and eventually panic it in caller side
 		return err
 	}
-	ws.Reset()
 	return nil
 }
 
@@ -267,6 +312,9 @@ func (ws *workingSet) State(s interface{}, opts ...protocol.StateOption) (uint64
 	cfg, err := processOptions(opts...)
 	if err != nil {
 		return ws.height, err
+	}
+	if cfg.Keys != nil {
+		return 0, errors.Wrap(ErrNotSupported, "Read state with keys option has not been implemented yet")
 	}
 	value, err := ws.store.Get(cfg.Namespace, cfg.Key)
 	if err != nil {
@@ -283,11 +331,15 @@ func (ws *workingSet) States(opts ...protocol.StateOption) (uint64, state.Iterat
 	if cfg.Key != nil {
 		return 0, nil, errors.Wrap(ErrNotSupported, "Read states with key option has not been implemented yet")
 	}
-	values, err := ws.store.States(cfg.Namespace, cfg.Keys)
+	keys, values, err := ws.store.States(cfg.Namespace, cfg.Keys)
 	if err != nil {
 		return 0, nil, err
 	}
-	return ws.height, state.NewIterator(values), nil
+	iter, err := state.NewIterator(keys, values)
+	if err != nil {
+		return 0, nil, err
+	}
+	return ws.height, iter, nil
 }
 
 // PutState puts a state into DB
@@ -315,32 +367,17 @@ func (ws *workingSet) DelState(opts ...protocol.StateOption) (uint64, error) {
 }
 
 // ReadView reads the view
-func (ws *workingSet) ReadView(name string) (interface{}, error) {
-	return ws.store.ReadView(name)
+func (ws *workingSet) ReadView(name string) (protocol.View, error) {
+	return ws.views.Read(name)
 }
 
 // WriteView writeback the view to factory
-func (ws *workingSet) WriteView(name string, v interface{}) error {
-	return ws.store.WriteView(name, v)
+func (ws *workingSet) WriteView(name string, v protocol.View) error {
+	ws.views.Write(name, v)
+	return nil
 }
 
-func (ws *workingSet) ProtocolDirty(name string) bool {
-	return ws.dock.ProtocolDirty(name)
-}
-
-func (ws *workingSet) Load(name, key string, v interface{}) error {
-	return ws.dock.Load(name, key, v)
-}
-
-func (ws *workingSet) Unload(name, key string, v interface{}) error {
-	return ws.dock.Unload(name, key, v)
-}
-
-func (ws *workingSet) Reset() {
-	ws.dock.Reset()
-}
-
-// createGenesisStates initialize the genesis states
+// CreateGenesisStates initialize the genesis states
 func (ws *workingSet) CreateGenesisStates(ctx context.Context) error {
 	if reg, ok := protocol.GetRegistry(ctx); ok {
 		for _, p := range reg.All() {
@@ -422,10 +459,89 @@ func (ws *workingSet) checkNonceContinuity(ctx context.Context, accountNonceMap 
 }
 
 func (ws *workingSet) Process(ctx context.Context, actions []*action.SealedEnvelope) error {
-	return ws.process(ctx, actions)
+	if protocol.MustGetFeatureCtx(ctx).CorrectValidationOrder {
+		return ws.process(ctx, actions)
+	}
+	return ws.processLegacy(ctx, actions)
 }
 
 func (ws *workingSet) process(ctx context.Context, actions []*action.SealedEnvelope) error {
+	if err := ws.validate(ctx); err != nil {
+		return err
+	}
+	userActions, systemActions := ws.splitActions(actions)
+	if protocol.MustGetFeatureCtx(ctx).PreStateSystemAction {
+		if err := ws.validatePostSystemActions(ctx, systemActions); err != nil {
+			return err
+		}
+	}
+	reg := protocol.MustGetRegistry(ctx)
+	for _, p := range reg.All() {
+		if pp, ok := p.(protocol.PreStatesCreator); ok {
+			if err := pp.CreatePreStates(ctx, ws); err != nil {
+				return err
+			}
+		}
+	}
+	var (
+		receipts            = make([]*action.Receipt, 0)
+		ctxWithBlockContext = ctx
+		blkCtx              = protocol.MustGetBlockCtx(ctx)
+		fCtx                = protocol.MustGetFeatureCtx(ctx)
+	)
+	for _, act := range userActions {
+		if err := ws.txValidator.ValidateWithState(ctxWithBlockContext, act); err != nil {
+			return err
+		}
+		actionCtx, err := withActionCtx(ctxWithBlockContext, act)
+		if err != nil {
+			return err
+		}
+		for _, p := range reg.All() {
+			if validator, ok := p.(protocol.ActionValidator); ok {
+				if err := validator.Validate(actionCtx, act.Envelope, ws); err != nil {
+					return err
+				}
+			}
+		}
+		receipt, err := ws.runAction(actionCtx, act)
+		if err != nil {
+			return errors.Wrap(err, "error when run action")
+		}
+		receipts = append(receipts, receipt)
+		if !action.IsSystemAction(act) {
+			blkCtx.GasLimit -= receipt.GasConsumed
+			if fCtx.EnableDynamicFeeTx && receipt.PriorityFee() != nil {
+				(&blkCtx.AccumulatedTips).Add(&blkCtx.AccumulatedTips, receipt.PriorityFee())
+			}
+			ctxWithBlockContext = protocol.WithBlockCtx(ctx, blkCtx)
+		}
+	}
+	// Handle post system actions
+	if !protocol.MustGetFeatureCtx(ctx).PreStateSystemAction {
+		if err := ws.validatePostSystemActions(ctxWithBlockContext, systemActions); err != nil {
+			return err
+		}
+	}
+	for _, act := range systemActions {
+		actionCtx, err := withActionCtx(ctxWithBlockContext, act)
+		if err != nil {
+			return err
+		}
+		receipt, err := ws.runAction(actionCtx, act)
+		if err != nil {
+			return errors.Wrap(err, "error when run action")
+		}
+		receipts = append(receipts, receipt)
+	}
+	if fCtx.CorrectTxLogIndex {
+		updateReceiptIndex(receipts)
+	}
+	ws.receipts = receipts
+	return ws.finalize()
+}
+
+func (ws *workingSet) processLegacy(ctx context.Context, actions []*action.SealedEnvelope) error {
 	if err := ws.validate(ctx); err != nil {
 		return err
 	}
@@ -438,7 +554,7 @@ func (ws *workingSet) process(ctx context.Context, actions []*action.SealedEnvel
 		}
 		for _, p := range reg.All() {
 			if validator, ok := p.(protocol.ActionValidator); ok {
-				if err := validator.Validate(ctxWithActionContext, act.Action(), ws); err != nil {
+				if err := validator.Validate(ctxWithActionContext, act.Envelope, ws); err != nil {
 					return err
 				}
 			}
@@ -452,12 +568,40 @@ func (ws *workingSet) process(ctx context.Context, actions []*action.SealedEnvel
 		}
 	}
 
-	receipts, err := ws.runActions(ctx, actions)
+	receipts, err := ws.runActionsLegacy(ctx, actions)
 	if err != nil {
 		return err
 	}
 	ws.receipts = receipts
 	return ws.finalize()
+}
+
+func (ws *workingSet) runActionsLegacy(
+	ctx context.Context,
+	elps []*action.SealedEnvelope,
+) ([]*action.Receipt, error) {
+	// Handle actions
+	receipts := make([]*action.Receipt, 0)
+	blkCtx := protocol.MustGetBlockCtx(ctx)
+	fCtx := protocol.MustGetFeatureCtx(ctx)
+	for _, elp := range elps {
+		ctxWithActionContext, err := withActionCtx(ctx, elp)
+		if err != nil {
+			return nil, err
+		}
+		receipt, err := ws.runAction(protocol.WithBlockCtx(ctxWithActionContext, blkCtx), elp)
+		if err != nil {
+			return nil, errors.Wrap(err, "error when run action")
+		}
+		receipts = append(receipts, receipt)
+		if fCtx.EnableDynamicFeeTx && receipt.PriorityFee() != nil {
+			(&blkCtx.AccumulatedTips).Add(&blkCtx.AccumulatedTips, receipt.PriorityFee())
+		}
+	}
+	if fCtx.CorrectTxLogIndex {
+		updateReceiptIndex(receipts)
+	}
+	return receipts, nil
 }
 
 func (ws *workingSet) generateSystemActions(ctx context.Context) ([]action.Envelope, error) {
@@ -477,34 +621,64 @@ func (ws *workingSet) generateSystemActions(ctx context.Context) ([]action.Envel
 
 // validateSystemActionLayout verify whether the post system actions are appended tail
 func (ws *workingSet) validateSystemActionLayout(ctx context.Context, actions []*action.SealedEnvelope) error {
+	// system actions should be at the end of the action list, and they should be continuous
+	hitSystemAction := false
+	for i := range actions {
+		if hitSystemAction {
+			if !action.IsSystemAction(actions[i]) {
+				return errors.Wrapf(errInvalidSystemActionLayout, "the %d-th action should be a system action", i)
+			}
+			continue
+		} else if action.IsSystemAction(actions[i]) {
+			hitSystemAction = true
+		}
+	}
+	return nil
+}
+
+func (ws *workingSet) validatePostSystemActions(ctx context.Context, systemActions []*action.SealedEnvelope) error {
 	postSystemActions, err := ws.generateSystemActions(ctx)
 	if err != nil {
 		return err
 	}
-	// system actions should be at the end of the action list, and they should be continuous
-	expectedStartIdx := len(actions) - len(postSystemActions)
-	sysActCnt := 0
-	for i := range actions {
-		if action.IsSystemAction(actions[i]) {
-			if i != expectedStartIdx+sysActCnt {
-				return errors.Wrapf(errInvalidSystemActionLayout, "the %d-th action should not be a system action", i)
+	if len(postSystemActions) != len(systemActions) {
+		return errors.Wrapf(errInvalidSystemActionLayout, "the number of system actions is incorrect, expected %d, got %d", len(postSystemActions), len(systemActions))
+	}
+	reg := protocol.MustGetRegistry(ctx)
+	for i, act := range systemActions {
+		actionCtx, err := withActionCtx(ctx, act)
+		if err != nil {
+			return err
+		}
+		for _, p := range reg.All() {
+			if validator, ok := p.(protocol.ActionValidator); ok {
+				if err := validator.Validate(actionCtx, act.Envelope, ws); err != nil {
+					return err
+				}
 			}
-			if actions[i].Envelope.Proto().String() != postSystemActions[sysActCnt].Proto().String() {
-				return errors.Wrapf(errInvalidSystemActionLayout, "the %d-th action is not the expected system action", i)
-			}
-			sysActCnt++
+		}
+		if actual, expect := act.Envelope.Proto().String(), postSystemActions[i].Proto().String(); actual != expect {
+			return errors.Wrapf(errInvalidSystemActionLayout, "the %d-th action is not the expected system action: %v, got %v", i, expect, actual)
 		}
 	}
-	if sysActCnt != len(postSystemActions) {
-		return errors.Wrapf(errInvalidSystemActionLayout, "the number of system actions is incorrect, expected %d, got %d", len(postSystemActions), sysActCnt)
-	}
 	return nil
+}
+
+func (ws *workingSet) splitActions(acts []*action.SealedEnvelope) (userActions []*action.SealedEnvelope, systemActions []*action.SealedEnvelope) {
+	for _, act := range acts {
+		if action.IsSystemAction(act) {
+			systemActions = append(systemActions, act)
+		} else {
+			userActions = append(userActions, act)
+		}
+	}
+	return userActions, systemActions
 }
 
 func (ws *workingSet) pickAndRunActions(
 	ctx context.Context,
 	ap actpool.ActPool,
-	postSystemActions []*action.SealedEnvelope,
+	sign func(elp action.Envelope) (*action.SealedEnvelope, error),
 	allowedBlockGasResidue uint64,
 ) ([]*action.SealedEnvelope, error) {
 	err := ws.validate(ctx)
@@ -515,6 +689,16 @@ func (ws *workingSet) pickAndRunActions(
 	executedActions := make([]*action.SealedEnvelope, 0)
 	reg := protocol.MustGetRegistry(ctx)
 
+	var (
+		systemActions []*action.SealedEnvelope
+	)
+	if protocol.MustGetFeatureCtx(ctx).PreStateSystemAction {
+		systemActions, err = ws.generateSignedSystemActions(ctx, sign)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	for _, p := range reg.All() {
 		if pp, ok := p.(protocol.PreStatesCreator); ok {
 			if err := pp.CreatePreStates(ctx, ws); err != nil {
@@ -524,34 +708,72 @@ func (ws *workingSet) pickAndRunActions(
 	}
 
 	// initial action iterator
-	blkCtx := protocol.MustGetBlockCtx(ctx)
-	ctxWithBlockContext := ctx
+	var (
+		ctxWithBlockContext = ctx
+		blkCtx              = protocol.MustGetBlockCtx(ctx)
+		fCtx                = protocol.MustGetFeatureCtx(ctx)
+		blobCnt             = uint64(0)
+		blobLimit           = params.MaxBlobGasPerBlock / params.BlobTxBlobGasPerBlob
+		deadline            *time.Time
+		fullGas             = blkCtx.GasLimit
+	)
 	if ap != nil {
+		if dl, ok := ctx.Deadline(); ok {
+			deadline = &dl
+		}
 		actionIterator := actioniterator.NewActionIterator(ap.PendingActionMap())
 		for {
-			nextAction, ok := actionIterator.Next()
-			if !ok {
+			if deadline != nil && time.Now().After(*deadline) {
+				duration := time.Since(blkCtx.BlockTimeStamp)
+				log.L().Warn("Stop processing actions due to deadline, please consider increasing hardware", zap.Time("deadline", *deadline), zap.Duration("duration", duration), zap.Int("actions", len(executedActions)), zap.Uint64("gas", fullGas-blkCtx.GasLimit))
+				_mintAbility.WithLabelValues("saturation").Set(1)
 				break
 			}
-			if nextAction.GasLimit() > blkCtx.GasLimit {
+			nextAction, ok := actionIterator.Next()
+			if !ok {
+				_mintAbility.WithLabelValues("saturation").Set(0)
+				break
+			}
+			if nextAction.Gas() > blkCtx.GasLimit {
 				actionIterator.PopAccount()
+				continue
+			}
+			if blobCnt+uint64(len(nextAction.BlobHashes())) > uint64(blobLimit) {
+				actionIterator.PopAccount()
+				continue
+			}
+			if container, ok := nextAction.Envelope.(action.TxContainer); ok {
+				if err := container.Unfold(nextAction, ctx, ws.checkContract); err != nil {
+					log.L().Debug("failed to unfold tx container", zap.Uint64("height", ws.height), zap.Error(err))
+					ap.DeleteAction(nextAction.SenderAddress())
+					actionIterator.PopAccount()
+					continue
+				}
+			}
+			if err := ws.txValidator.ValidateWithState(ctxWithBlockContext, nextAction); err != nil {
+				log.L().Debug("failed to ValidateWithState", zap.Uint64("height", ws.height), zap.Error(err))
+				if !errors.Is(err, action.ErrNonceTooLow) {
+					ap.DeleteAction(nextAction.SenderAddress())
+					actionIterator.PopAccount()
+				}
 				continue
 			}
 			actionCtx, err := withActionCtx(ctxWithBlockContext, nextAction)
 			if err == nil {
 				for _, p := range reg.All() {
 					if validator, ok := p.(protocol.ActionValidator); ok {
-						if err = validator.Validate(actionCtx, nextAction.Action(), ws); err != nil {
+						if err = validator.Validate(actionCtx, nextAction.Envelope, ws); err != nil {
 							break
 						}
 					}
 				}
 			}
+			caller := nextAction.SenderAddress()
 			if err != nil {
-				caller := nextAction.SenderAddress()
 				if caller == nil {
 					return nil, errors.New("failed to get address")
 				}
+				log.L().Debug("failed to validate tx", zap.Uint64("height", ws.height), zap.Error(err))
 				ap.DeleteAction(caller)
 				actionIterator.PopAccount()
 				continue
@@ -560,12 +782,17 @@ func (ws *workingSet) pickAndRunActions(
 			switch errors.Cause(err) {
 			case nil:
 				// do nothing
-			case action.ErrChainID:
-				continue
 			case action.ErrGasLimit:
 				actionIterator.PopAccount()
 				continue
+			case action.ErrChainID, errUnfoldTxContainer, errDeployerNotWhitelisted:
+				log.L().Debug("runAction() failed", zap.Uint64("height", ws.height), zap.Error(err))
+				ap.DeleteAction(caller)
+				actionIterator.PopAccount()
+				continue
 			default:
+				ap.DeleteAction(caller)
+				actionIterator.PopAccount()
 				nextActionHash, hashErr := nextAction.Hash()
 				if hashErr != nil {
 					return nil, errors.Wrapf(hashErr, "Failed to get hash for %x", nextActionHash)
@@ -573,19 +800,31 @@ func (ws *workingSet) pickAndRunActions(
 				return nil, errors.Wrapf(err, "Failed to update state changes for selp %x", nextActionHash)
 			}
 			blkCtx.GasLimit -= receipt.GasConsumed
+			if fCtx.EnableDynamicFeeTx && receipt.PriorityFee() != nil {
+				(&blkCtx.AccumulatedTips).Add(&blkCtx.AccumulatedTips, receipt.PriorityFee())
+			}
 			ctxWithBlockContext = protocol.WithBlockCtx(ctx, blkCtx)
 			receipts = append(receipts, receipt)
 			executedActions = append(executedActions, nextAction)
+			blobCnt += uint64(len(nextAction.BlobHashes()))
 
 			// To prevent loop all actions in act_pool, we stop processing action when remaining gas is below
 			// than certain threshold
 			if blkCtx.GasLimit < allowedBlockGasResidue {
+				_mintAbility.WithLabelValues("saturation").Set(0)
 				break
 			}
 		}
 	}
 
-	for _, selp := range postSystemActions {
+	if !fCtx.PreStateSystemAction {
+		systemActions, err = ws.generateSignedSystemActions(ctx, sign)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	for _, selp := range systemActions {
 		actionCtx, err := withActionCtx(ctxWithBlockContext, selp)
 		if err != nil {
 			return nil, err
@@ -597,12 +836,28 @@ func (ws *workingSet) pickAndRunActions(
 		receipts = append(receipts, receipt)
 		executedActions = append(executedActions, selp)
 	}
-	if protocol.MustGetFeatureCtx(ctx).CorrectTxLogIndex {
+	if fCtx.CorrectTxLogIndex {
 		updateReceiptIndex(receipts)
 	}
 	ws.receipts = receipts
 
 	return executedActions, ws.finalize()
+}
+
+func (ws *workingSet) generateSignedSystemActions(ctx context.Context, sign func(elp action.Envelope) (*action.SealedEnvelope, error)) ([]*action.SealedEnvelope, error) {
+	unsignedSystemActions, err := ws.generateSystemActions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	postSystemActions := make([]*action.SealedEnvelope, len(unsignedSystemActions))
+	for i, elp := range unsignedSystemActions {
+		selp, err := sign(elp)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to sign %+v", elp.Action())
+		}
+		postSystemActions[i] = selp
+	}
+	return postSystemActions, nil
 }
 
 func updateReceiptIndex(receipts []*action.Receipt) {
@@ -614,7 +869,8 @@ func updateReceiptIndex(receipts []*action.Receipt) {
 }
 
 func (ws *workingSet) ValidateBlock(ctx context.Context, blk *block.Block) error {
-	if protocol.MustGetFeatureCtx(ctx).SkipSystemActionNonce {
+	fCtx := protocol.MustGetFeatureCtx(ctx)
+	if fCtx.SkipSystemActionNonce {
 		if err := ws.validateNonceSkipSystemAction(ctx, blk); err != nil {
 			return errors.Wrap(err, "failed to validate nonce")
 		}
@@ -623,13 +879,34 @@ func (ws *workingSet) ValidateBlock(ctx context.Context, blk *block.Block) error
 			return errors.Wrap(err, "failed to validate nonce")
 		}
 	}
-	if protocol.MustGetFeatureCtx(ctx).ValidateSystemAction {
+	if fCtx.ValidateSystemAction {
 		if err := ws.validateSystemActionLayout(ctx, blk.RunnableActions().Actions()); err != nil {
 			return err
 		}
 	}
 
-	if err := ws.process(ctx, blk.RunnableActions().Actions()); err != nil {
+	if fCtx.EnableDynamicFeeTx {
+		bcCtx := protocol.MustGetBlockchainCtx(ctx)
+		if err := protocol.VerifyEIP1559Header(
+			genesis.MustExtractGenesisContext(ctx).Blockchain, &bcCtx.Tip, &blk.Header); err != nil {
+			return err
+		}
+	}
+	if fCtx.EnableBlobTransaction {
+		blobCnt := uint64(0)
+		blobLimit := uint64(params.MaxBlobGasPerBlock / params.BlobTxBlobGasPerBlob)
+		for _, selp := range blk.Actions {
+			blobCnt += uint64(len(selp.BlobHashes()))
+			if blobCnt > blobLimit {
+				return errors.New("too many blob transactions in a block")
+			}
+		}
+		bcCtx := protocol.MustGetBlockchainCtx(ctx)
+		if err := protocol.VerifyEIP4844Header(&bcCtx.Tip, &blk.Header); err != nil {
+			return err
+		}
+	}
+	if err := ws.Process(ctx, blk.RunnableActions().Actions()); err != nil {
 		log.L().Error("Failed to update state.", zap.Uint64("height", ws.height), zap.Error(err))
 		return err
 	}
@@ -652,33 +929,57 @@ func (ws *workingSet) ValidateBlock(ctx context.Context, blk *block.Block) error
 func (ws *workingSet) CreateBuilder(
 	ctx context.Context,
 	ap actpool.ActPool,
-	postSystemActions []*action.SealedEnvelope,
+	sign func(elp action.Envelope) (*action.SealedEnvelope, error),
 	allowedBlockGasResidue uint64,
 ) (*block.Builder, error) {
-	actions, err := ws.pickAndRunActions(ctx, ap, postSystemActions, allowedBlockGasResidue)
+	actions, err := ws.pickAndRunActions(ctx, ap, sign, allowedBlockGasResidue)
 	if err != nil {
 		return nil, err
 	}
 
-	ra := block.NewRunnableActionsBuilder().
-		AddActions(actions...).
-		Build()
-
-	blkCtx := protocol.MustGetBlockCtx(ctx)
-	bcCtx := protocol.MustGetBlockchainCtx(ctx)
-	prevBlkHash := bcCtx.Tip.Hash
+	var (
+		blkCtx = protocol.MustGetBlockCtx(ctx)
+		bcCtx  = protocol.MustGetBlockchainCtx(ctx)
+		fCtx   = protocol.MustGetFeatureCtx(ctx)
+	)
 	digest, err := ws.digest()
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to get digest")
 	}
 
+	ra := block.NewRunnableActionsBuilder().
+		AddActions(actions...).
+		Build()
 	blkBuilder := block.NewBuilder(ra).
 		SetHeight(blkCtx.BlockHeight).
 		SetTimestamp(blkCtx.BlockTimeStamp).
-		SetPrevBlockHash(prevBlkHash).
+		SetPrevBlockHash(bcCtx.Tip.Hash).
 		SetDeltaStateDigest(digest).
 		SetReceipts(ws.receipts).
 		SetReceiptRoot(calculateReceiptRoot(ws.receipts)).
 		SetLogsBloom(calculateLogsBloom(ctx, ws.receipts))
+	if fCtx.EnableDynamicFeeTx {
+		blkBuilder.SetGasUsed(calculateGasUsed(ws.receipts))
+		blkBuilder.SetBaseFee(blkCtx.BaseFee)
+	}
+	if fCtx.EnableBlobTransaction {
+		blkBuilder.SetBlobGasUsed(calculateBlobGasUsed(ws.receipts))
+		blkBuilder.SetExcessBlobGas(blkCtx.ExcessBlobGas)
+	}
 	return blkBuilder, nil
+}
+
+func (ws *workingSet) NewWorkingSet(ctx context.Context) (*workingSet, error) {
+	if !ws.finalized {
+		return nil, errors.New("workingset has not been finalized yet")
+	}
+	store, err := ws.workingSetStoreFactory.CreateWorkingSetStore(ctx, ws.height+1, ws.store)
+	if err != nil {
+		return nil, err
+	}
+	views := ws.views.Clone()
+	if err := views.Commit(ctx, ws); err != nil {
+		return nil, err
+	}
+	return newWorkingSet(ws.height+1, views, store, ws.workingSetStoreFactory), nil
 }

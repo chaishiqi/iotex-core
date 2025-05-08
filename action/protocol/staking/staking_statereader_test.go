@@ -8,23 +8,23 @@ package staking
 import (
 	"context"
 	"math/big"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/exp/slices"
 
 	"github.com/iotexproject/iotex-address/address"
 	"github.com/iotexproject/iotex-proto/golang/iotexapi"
 
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/rolldpos"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/pkg/util/byteutil"
-	"github.com/iotexproject/iotex-core/state"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/test/mock/mock_factory"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rolldpos"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/pkg/util/byteutil"
+	"github.com/iotexproject/iotex-core/v2/state"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/test/mock/mock_factory"
 )
 
 func TestStakingStateReader(t *testing.T) {
@@ -37,7 +37,7 @@ func TestStakingStateReader(t *testing.T) {
 			Reward:             identityset.Address(1),
 			Name:               "cand1",
 			Votes:              big.NewInt(10),
-			SelfStakeBucketIdx: 0,
+			SelfStakeBucketIdx: candidateNoSelfStakeBucketIndex,
 			SelfStake:          big.NewInt(10),
 		},
 		{
@@ -46,32 +46,34 @@ func TestStakingStateReader(t *testing.T) {
 			Reward:             identityset.Address(2),
 			Name:               "cand2",
 			Votes:              big.NewInt(0),
-			SelfStakeBucketIdx: 0,
+			SelfStakeBucketIdx: candidateNoSelfStakeBucketIndex,
 			SelfStake:          big.NewInt(0),
 		},
 	}
 	testContractBuckets := []*VoteBucket{
 		{
-			Index:           1,
-			Candidate:       identityset.Address(1),
-			Owner:           identityset.Address(1),
-			StakedAmount:    big.NewInt(100),
-			StakedDuration:  time.Hour * 24,
-			CreateTime:      time.Now(),
-			StakeStartTime:  time.Now(),
-			AutoStake:       true,
-			ContractAddress: contractAddress,
+			Index:                   1,
+			Candidate:               identityset.Address(1),
+			Owner:                   identityset.Address(1),
+			StakedAmount:            big.NewInt(100),
+			StakedDuration:          time.Hour * 24,
+			CreateTime:              time.Now(),
+			StakeStartTime:          time.Now(),
+			AutoStake:               true,
+			ContractAddress:         contractAddress,
+			UnstakeStartBlockHeight: maxBlockNumber,
 		},
 		{
-			Index:           2,
-			Candidate:       identityset.Address(2),
-			Owner:           identityset.Address(2),
-			StakedAmount:    big.NewInt(100),
-			StakedDuration:  time.Hour * 24,
-			CreateTime:      time.Now(),
-			StakeStartTime:  time.Now(),
-			AutoStake:       true,
-			ContractAddress: contractAddress,
+			Index:                   2,
+			Candidate:               identityset.Address(2),
+			Owner:                   identityset.Address(2),
+			StakedAmount:            big.NewInt(100),
+			StakedDuration:          time.Hour * 24,
+			CreateTime:              time.Now(),
+			StakeStartTime:          time.Now(),
+			AutoStake:               true,
+			ContractAddress:         contractAddress,
+			UnstakeStartBlockHeight: maxBlockNumber,
 		},
 	}
 	testNativeBuckets := []*VoteBucket{
@@ -94,12 +96,14 @@ func TestStakingStateReader(t *testing.T) {
 		testNativeTotalAmount.count++
 	}
 	var err error
+	keys := make([][]byte, len(testNativeBuckets))
 	states := make([][]byte, len(testNativeBuckets))
 	for i := range states {
+		keys[i] = byteutil.Uint64ToBytesBigEndian(uint64(i))
 		states[i], err = state.Serialize(testNativeBuckets[i])
 		r.NoError(err)
 	}
-	prepare := func(t *testing.T) (*mock_factory.MockFactory, *MockContractStakingIndexer, ReadState, context.Context, *require.Assertions) {
+	prepare := func(t *testing.T) (*mock_factory.MockFactory, *MockContractStakingIndexerWithBucketType, ReadState, context.Context, *require.Assertions) {
 		r := require.New(t)
 		ctrl := gomock.NewController(t)
 		sf := mock_factory.NewMockFactory(ctrl)
@@ -122,17 +126,27 @@ func TestStakingStateReader(t *testing.T) {
 		}
 		sf.EXPECT().ReadView(gomock.Any()).Return(testNativeData, nil).Times(1)
 
-		contractIndexer := NewMockContractStakingIndexer(ctrl)
+		contractIndexer := NewMockContractStakingIndexerWithBucketType(ctrl)
 		contractIndexer.EXPECT().Buckets(gomock.Any()).Return(testContractBuckets, nil).AnyTimes()
-
-		stakeSR, err := newCompositeStakingStateReader(contractIndexer, nil, sf)
+		contractIndexer.EXPECT().BucketsByCandidate(gomock.Any(), gomock.Any()).DoAndReturn(func(ownerAddr address.Address, height uint64) ([]*VoteBucket, error) {
+			buckets := []*VoteBucket{}
+			for i := range testContractBuckets {
+				if testContractBuckets[i].Owner.String() == ownerAddr.String() {
+					buckets = append(buckets, testContractBuckets[i])
+				}
+			}
+			return buckets, nil
+		}).AnyTimes()
+		stakeSR, err := newCompositeStakingStateReader(nil, sf, func(v *VoteBucket, selfStake bool) *big.Int {
+			return v.StakedAmount
+		}, contractIndexer)
 		r.NoError(err)
 		r.NotNil(stakeSR)
 
 		reg := protocol.NewRegistry()
 		rolldposProto := rolldpos.NewProtocol(10, 10, 10)
 		rolldposProto.Register(reg)
-		g := genesis.Default
+		g := genesis.TestDefault()
 		g.QuebecBlockHeight = 1
 		ctx := genesis.WithGenesisContext(context.Background(), g)
 		ctx = protocol.WithRegistry(ctx, reg)
@@ -152,9 +166,11 @@ func TestStakingStateReader(t *testing.T) {
 	t.Run("readStateBuckets", func(t *testing.T) {
 		sf, _, stakeSR, ctx, r := prepare(t)
 		sf.EXPECT().States(gomock.Any(), gomock.Any()).DoAndReturn(func(arg0 ...protocol.StateOption) (uint64, state.Iterator, error) {
-			iter := state.NewIterator(states)
+			iter, err := state.NewIterator(keys, states)
+			r.NoError(err)
 			return uint64(1), iter, nil
 		}).Times(1)
+		sf.EXPECT().State(gomock.Any(), gomock.Any()).Return(uint64(0), state.ErrStateNotExist).Times(1)
 
 		req := &iotexapi.ReadStakingDataRequest_VoteBuckets{
 			Pagination: &iotexapi.PaginationParam{
@@ -175,6 +191,40 @@ func TestStakingStateReader(t *testing.T) {
 			iotexBucket, err := testContractBuckets[i].toIoTeXTypes()
 			r.NoError(err)
 			r.Equal(iotexBucket, buckets.Buckets[i+len(testNativeBuckets)])
+		}
+	})
+	t.Run("readStateBucketsWithEndorsement", func(t *testing.T) {
+		sf, _, stakeSR, ctx, r := prepare(t)
+		sf.EXPECT().States(gomock.Any(), gomock.Any()).DoAndReturn(func(arg0 ...protocol.StateOption) (uint64, state.Iterator, error) {
+			iter, err := state.NewIterator(keys, states)
+			r.NoError(err)
+			return uint64(1), iter, nil
+		}).Times(1)
+		sf.EXPECT().State(gomock.AssignableToTypeOf(&Endorsement{}), gomock.Any()).DoAndReturn(func(arg0 any, arg1 ...protocol.StateOption) (uint64, error) {
+			arg0R := arg0.(*Endorsement)
+			*arg0R = Endorsement{ExpireHeight: 100}
+			return uint64(1), nil
+		}).AnyTimes()
+
+		req := &iotexapi.ReadStakingDataRequest_VoteBuckets{
+			Pagination: &iotexapi.PaginationParam{
+				Offset: 0,
+				Limit:  100,
+			},
+		}
+		buckets, height, err := stakeSR.readStateBuckets(ctx, req)
+		r.NoError(err)
+		r.EqualValues(1, height)
+		r.Len(buckets.Buckets, len(testNativeBuckets)+len(testContractBuckets))
+		iotexBuckets, err := toIoTeXTypesVoteBucketList(sf, testNativeBuckets)
+		r.NoError(err)
+		for i := range testNativeBuckets {
+			r.Equal(iotexBuckets.Buckets[i], buckets.Buckets[i])
+		}
+		iotexBuckets, err = toIoTeXTypesVoteBucketList(sf, testContractBuckets)
+		r.NoError(err)
+		for i := range testContractBuckets {
+			r.Equal(iotexBuckets.Buckets[i], buckets.Buckets[i+len(testNativeBuckets)])
 		}
 	})
 
@@ -199,6 +249,9 @@ func TestStakingStateReader(t *testing.T) {
 			arg0R := arg0.(*totalBucketCount)
 			*arg0R = totalBucketCount{count: 1}
 			return uint64(1), nil
+		}).Times(1)
+		sf.EXPECT().State(gomock.AssignableToTypeOf(&Endorsement{}), gomock.Any()).DoAndReturn(func(arg0 any, arg1 ...protocol.StateOption) (uint64, error) {
+			return uint64(0), state.ErrStateNotExist
 		}).Times(1)
 
 		req := &iotexapi.ReadStakingDataRequest_VoteBucketsByVoter{
@@ -241,6 +294,9 @@ func TestStakingStateReader(t *testing.T) {
 			*arg0R = totalBucketCount{count: 1}
 			return uint64(1), nil
 		}).Times(1)
+		sf.EXPECT().State(gomock.AssignableToTypeOf(&Endorsement{}), gomock.Any()).DoAndReturn(func(arg0 any, arg1 ...protocol.StateOption) (uint64, error) {
+			return uint64(0), state.ErrStateNotExist
+		}).Times(1)
 		contractIndexer.EXPECT().BucketsByCandidate(gomock.Any(), gomock.Any()).DoAndReturn(func(arg0 address.Address, arg1 uint64) ([]*VoteBucket, error) {
 			buckets := []*VoteBucket{}
 			for i := range testContractBuckets {
@@ -249,7 +305,7 @@ func TestStakingStateReader(t *testing.T) {
 				}
 			}
 			return buckets, nil
-		}).Times(1)
+		}).MaxTimes(2)
 		req := &iotexapi.ReadStakingDataRequest_VoteBucketsByCandidate{
 			Pagination: &iotexapi.PaginationParam{
 				Offset: 0,
@@ -285,6 +341,9 @@ func TestStakingStateReader(t *testing.T) {
 			*arg0R = totalBucketCount{count: 1}
 			return uint64(1), nil
 		}).Times(1)
+		sf.EXPECT().State(gomock.AssignableToTypeOf(&Endorsement{}), gomock.Any()).DoAndReturn(func(arg0 any, arg1 ...protocol.StateOption) (uint64, error) {
+			return uint64(0), state.ErrStateNotExist
+		}).Times(1)
 		contractIndexer.EXPECT().BucketsByIndices(gomock.Any(), gomock.Any()).DoAndReturn(func(arg0 []uint64, arg1 uint64) ([]*VoteBucket, error) {
 			buckets := []*VoteBucket{}
 			for i := range arg0 {
@@ -319,7 +378,7 @@ func TestStakingStateReader(t *testing.T) {
 			return uint64(1), nil
 		}).Times(1)
 		contractIndexer.EXPECT().TotalBucketCount(gomock.Any()).Return(uint64(len(testContractBuckets)), nil).Times(1)
-		cfg := genesis.Default
+		cfg := genesis.TestDefault()
 		cfg.GreenlandBlockHeight = 0
 		ctx = genesis.WithGenesisContext(ctx, cfg)
 		ctx = protocol.WithFeatureWithHeightCtx(ctx)
@@ -331,15 +390,7 @@ func TestStakingStateReader(t *testing.T) {
 		r.EqualValues(3, bucketCount.Active)
 	})
 	t.Run("readStateCandidates", func(t *testing.T) {
-		_, contractIndexer, stakeSR, ctx, r := prepare(t)
-		contractIndexer.EXPECT().CandidateVotes(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, ownerAddr address.Address, height uint64) (*big.Int, error) {
-			for _, b := range testContractBuckets {
-				if b.Owner.String() == ownerAddr.String() {
-					return b.StakedAmount, nil
-				}
-			}
-			return big.NewInt(0), nil
-		}).MinTimes(1)
+		_, _, stakeSR, ctx, r := prepare(t)
 		req := &iotexapi.ReadStakingDataRequest_Candidates{
 			Pagination: &iotexapi.PaginationParam{
 				Offset: 0,
@@ -361,15 +412,7 @@ func TestStakingStateReader(t *testing.T) {
 		}
 	})
 	t.Run("readStateCandidateByName", func(t *testing.T) {
-		_, contractIndexer, stakeSR, ctx, r := prepare(t)
-		contractIndexer.EXPECT().CandidateVotes(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, ownerAddr address.Address, height uint64) (*big.Int, error) {
-			for _, b := range testContractBuckets {
-				if b.Owner.String() == ownerAddr.String() {
-					return b.StakedAmount, nil
-				}
-			}
-			return big.NewInt(0), nil
-		}).MinTimes(1)
+		_, _, stakeSR, ctx, r := prepare(t)
 		req := &iotexapi.ReadStakingDataRequest_CandidateByName{
 			CandName: "cand1",
 		}
@@ -384,15 +427,7 @@ func TestStakingStateReader(t *testing.T) {
 		r.EqualValues(expectCand.toIoTeXTypes(), candidate)
 	})
 	t.Run("readStateCandidateByAddress", func(t *testing.T) {
-		_, contractIndexer, stakeSR, ctx, r := prepare(t)
-		contractIndexer.EXPECT().CandidateVotes(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, ownerAddr address.Address, height uint64) (*big.Int, error) {
-			for _, b := range testContractBuckets {
-				if b.Owner.String() == ownerAddr.String() {
-					return b.StakedAmount, nil
-				}
-			}
-			return big.NewInt(0), nil
-		}).MinTimes(1)
+		_, _, stakeSR, ctx, r := prepare(t)
 		req := &iotexapi.ReadStakingDataRequest_CandidateByAddress{
 			OwnerAddr: identityset.Address(1).String(),
 		}
@@ -413,7 +448,7 @@ func TestStakingStateReader(t *testing.T) {
 			*arg0R = *testNativeTotalAmount
 			return uint64(1), nil
 		}).Times(1)
-		cfg := genesis.Default
+		cfg := genesis.TestDefault()
 		cfg.GreenlandBlockHeight = 0
 		ctx = genesis.WithGenesisContext(ctx, cfg)
 		ctx = protocol.WithFeatureWithHeightCtx(ctx)

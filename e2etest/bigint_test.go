@@ -16,23 +16,23 @@ import (
 
 	"github.com/iotexproject/iotex-address/address"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/account"
-	accountutil "github.com/iotexproject/iotex-core/action/protocol/account/util"
-	"github.com/iotexproject/iotex-core/action/protocol/execution"
-	"github.com/iotexproject/iotex-core/action/protocol/rewarding"
-	"github.com/iotexproject/iotex-core/action/protocol/rolldpos"
-	"github.com/iotexproject/iotex-core/actpool"
-	"github.com/iotexproject/iotex-core/blockchain"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/blockdao"
-	"github.com/iotexproject/iotex-core/blockchain/filedao"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/config"
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/state/factory"
-	"github.com/iotexproject/iotex-core/testutil"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/account"
+	accountutil "github.com/iotexproject/iotex-core/v2/action/protocol/account/util"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/execution"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rewarding"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rolldpos"
+	"github.com/iotexproject/iotex-core/v2/actpool"
+	"github.com/iotexproject/iotex-core/v2/blockchain"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/blockdao"
+	"github.com/iotexproject/iotex-core/v2/blockchain/filedao"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/config"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/state/factory"
+	"github.com/iotexproject/iotex-core/v2/testutil"
 )
 
 const (
@@ -93,7 +93,7 @@ func prepareBlockchain(ctx context.Context, _executor string, r *require.Asserti
 	rp := rolldpos.NewProtocol(cfg.Genesis.NumCandidateDelegates, cfg.Genesis.NumDelegates, cfg.Genesis.NumSubEpochs)
 	r.NoError(rp.Register(registry))
 	factoryCfg := factory.GenerateConfig(cfg.Chain, cfg.Genesis)
-	sf, err := factory.NewFactory(factoryCfg, db.NewMemKVStore(), factory.RegistryOption(registry))
+	sf, err := factory.NewStateDB(factoryCfg, db.NewMemKVStore(), factory.RegistryStateDBOption(registry))
 	r.NoError(err)
 	genericValidator := protocol.NewGenericValidator(sf, accountutil.AccountState)
 	ap, err := actpool.NewActPool(cfg.Genesis, sf, cfg.ActPool)
@@ -116,7 +116,7 @@ func prepareBlockchain(ctx context.Context, _executor string, r *require.Asserti
 	reward := rewarding.NewProtocol(cfg.Genesis.Rewarding)
 	r.NoError(reward.Register(registry))
 
-	ep := execution.NewProtocol(dao.GetBlockHash, rewarding.DepositGasWithSGD, nil, fakeGetBlockTime)
+	ep := execution.NewProtocol(dao.GetBlockHash, rewarding.DepositGas, fakeGetBlockTime)
 	r.NoError(ep.Register(registry))
 	r.NoError(bc.Start(ctx))
 	ctx = genesis.WithGenesisContext(ctx, cfg.Genesis)
@@ -125,26 +125,16 @@ func prepareBlockchain(ctx context.Context, _executor string, r *require.Asserti
 }
 
 func prepareTransfer(bc blockchain.Blockchain, sf factory.Factory, ap actpool.ActPool, r *require.Assertions) (*block.Block, error) {
-	exec, err := action.NewTransfer(1, big.NewInt(-10000), _recipient, nil, uint64(1000000), big.NewInt(9000000000000))
-	r.NoError(err)
-	builder := &action.EnvelopeBuilder{}
-	elp := builder.SetAction(exec).
-		SetNonce(exec.Nonce()).
-		SetGasLimit(exec.GasLimit()).
-		SetGasPrice(exec.GasPrice()).
-		Build()
+	exec := action.NewTransfer(big.NewInt(-10000), _recipient, nil)
+	elp := (&action.EnvelopeBuilder{}).SetAction(exec).SetNonce(1).SetGasLimit(1000000).
+		SetGasPrice(big.NewInt(9000000000000)).Build()
 	return prepare(bc, sf, ap, elp, r)
 }
 
 func prepareAction(bc blockchain.Blockchain, sf factory.Factory, ap actpool.ActPool, r *require.Assertions) (*block.Block, error) {
-	exec, err := action.NewExecution(action.EmptyAddress, 1, big.NewInt(-100), uint64(1000000), big.NewInt(9000000000000), []byte{})
-	r.NoError(err)
-	builder := &action.EnvelopeBuilder{}
-	elp := builder.SetAction(exec).
-		SetNonce(exec.Nonce()).
-		SetGasLimit(exec.GasLimit()).
-		SetGasPrice(exec.GasPrice()).
-		Build()
+	exec := action.NewExecution(action.EmptyAddress, big.NewInt(-100), []byte{})
+	elp := (&action.EnvelopeBuilder{}).SetAction(exec).SetNonce(1).SetGasLimit(1000000).
+		SetGasPrice(big.NewInt(9000000000000)).Build()
 	return prepare(bc, sf, ap, elp, r)
 }
 

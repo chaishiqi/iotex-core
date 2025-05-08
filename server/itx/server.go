@@ -12,21 +12,25 @@ import (
 	"net/http/pprof"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 
-	"github.com/iotexproject/iotex-core/api"
-	"github.com/iotexproject/iotex-core/chainservice"
-	"github.com/iotexproject/iotex-core/config"
-	"github.com/iotexproject/iotex-core/dispatcher"
-	"github.com/iotexproject/iotex-core/p2p"
-	"github.com/iotexproject/iotex-core/pkg/ha"
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/pkg/probe"
-	"github.com/iotexproject/iotex-core/pkg/routine"
-	"github.com/iotexproject/iotex-core/pkg/util/httputil"
-	"github.com/iotexproject/iotex-core/server/itx/nodestats"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/api"
+	"github.com/iotexproject/iotex-core/v2/chainservice"
+	"github.com/iotexproject/iotex-core/v2/config"
+	"github.com/iotexproject/iotex-core/v2/dispatcher"
+	"github.com/iotexproject/iotex-core/v2/p2p"
+	"github.com/iotexproject/iotex-core/v2/pkg/ha"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/pkg/probe"
+	"github.com/iotexproject/iotex-core/v2/pkg/routine"
+	"github.com/iotexproject/iotex-core/v2/pkg/util/httputil"
+	"github.com/iotexproject/iotex-core/v2/server/itx/nodestats"
+	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 )
 
 // Server is the iotex server instance containing all components.
@@ -55,17 +59,46 @@ func NewInMemTestServer(cfg config.Config) (*Server, error) { // notest
 }
 
 func newServer(cfg config.Config, testing bool) (*Server, error) {
+	// TODO: move to a separate package
+	actionDeserializer := (&action.Deserializer{}).SetEvmNetworkID(cfg.Chain.EVMNetworkID)
 	// create dispatcher instance
-	dispatcher, err := dispatcher.NewDispatcher(cfg.Dispatcher)
+	dispatcher, err := dispatcher.NewDispatcher(cfg.Dispatcher, func(msg proto.Message) (string, error) {
+		// TODO: support more types of messages
+		switch pb := msg.(type) {
+		case *iotextypes.Action:
+			act, err := actionDeserializer.ActionToSealedEnvelope(pb)
+			if err != nil {
+				return "", err
+			}
+			if err := act.VerifySignature(); err != nil {
+				return "", err
+			}
+			pubkey := act.SrcPubkey()
+			if pubkey == nil {
+				return "", errors.New("public key is nil")
+			}
+			return string(pubkey.Bytes()), nil
+		default:
+			return "", nil
+		}
+	})
 	if err != nil {
 		return nil, errors.Wrap(err, "fail to create dispatcher")
 	}
+
 	var p2pAgent p2p.Agent
 	switch cfg.Consensus.Scheme {
 	case config.StandaloneScheme:
 		p2pAgent = p2p.NewDummyAgent()
 	default:
-		p2pAgent = p2p.NewAgent(cfg.Network, cfg.Chain.ID, cfg.Genesis.Hash(), dispatcher.HandleBroadcast, dispatcher.HandleTell)
+		p2pAgent = p2p.NewAgent(
+			cfg.Network,
+			cfg.Chain.ID,
+			cfg.Genesis.Hash(),
+			dispatcher.ValidateMessage,
+			dispatcher.HandleBroadcast,
+			dispatcher.HandleTell,
+		)
 	}
 	chains := make(map[uint32]*chainservice.ChainService)
 	apiServers := make(map[uint32]*api.ServerV2)
@@ -83,7 +116,7 @@ func newServer(cfg config.Config, testing bool) (*Server, error) {
 		return nil, errors.Wrap(err, "fail to create chain service")
 	}
 	nodeStats := nodestats.NewNodeStats(rpcStats, cs.BlockSync(), p2pAgent)
-	apiServer, err := cs.NewAPIServer(cfg.API, cfg.Plugins)
+	apiServer, err := cs.NewAPIServer(cfg.API, cfg.Chain.EnableArchiveMode)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create api server")
 	}
@@ -113,7 +146,7 @@ func newServer(cfg config.Config, testing bool) (*Server, error) {
 
 // Start starts the server
 func (s *Server) Start(ctx context.Context) error {
-	cctx, cancel := context.WithCancel(context.Background())
+	cctx, cancel := context.WithCancel(ctx)
 	s.subModuleCancel = cancel
 	for id, cs := range s.chainservices {
 		if err := cs.Start(cctx); err != nil {
@@ -231,9 +264,16 @@ func StartServer(ctx context.Context, svr *Server, probeSvr *probe.Server, cfg c
 			log.L().Panic("Failed to stop server.", zap.Error(err))
 		}
 	}()
+	if _, isGateway := cfg.Plugins[config.GatewayPlugin]; isGateway && cfg.API.ReadyDuration > 0 {
+		// wait for a while to make sure the server is ready
+		// The original intention was to ensure that all transactions that were not received during the restart were included in block, thereby avoiding inconsistencies in the state of the API node.
+		log.L().Info("Waiting for server to be ready.", zap.Duration("duration", cfg.API.ReadyDuration))
+		time.Sleep(cfg.API.ReadyDuration)
+	}
 	if err := probeSvr.TurnOn(); err != nil {
 		log.L().Panic("Failed to turn on probe server.", zap.Error(err))
 	}
+	log.L().Info("Server is ready.")
 
 	if cfg.System.HeartbeatInterval > 0 {
 		task := routine.NewRecurringTask(NewHeartbeatHandler(svr, cfg.Network).Log, cfg.System.HeartbeatInterval)

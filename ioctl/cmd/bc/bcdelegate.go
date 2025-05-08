@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"slices"
 	"strings"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/util/metautils"
@@ -16,13 +17,12 @@ import (
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
-	"golang.org/x/exp/slices"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/iotexproject/iotex-core/ioctl/config"
-	"github.com/iotexproject/iotex-core/ioctl/output"
-	"github.com/iotexproject/iotex-core/ioctl/util"
+	"github.com/iotexproject/iotex-core/v2/ioctl/config"
+	"github.com/iotexproject/iotex-core/v2/ioctl/output"
+	"github.com/iotexproject/iotex-core/v2/ioctl/util"
 )
 
 // Multi-language support
@@ -62,6 +62,7 @@ func (m *delegateMessage) delegateString() string {
 		lines    []string
 	)
 	lines = append(lines, "{")
+	lines = append(lines, fmt.Sprintf("	id: %s", d.Id))
 	lines = append(lines, fmt.Sprintf("	name: %s", d.Name))
 	lines = append(lines, fmt.Sprintf("	ownerAddress: %s", d.OwnerAddress))
 	lines = append(lines, fmt.Sprintf("	operatorAddress: %s", d.OperatorAddress))

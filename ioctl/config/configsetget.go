@@ -15,8 +15,8 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v2"
 
-	"github.com/iotexproject/iotex-core/ioctl/output"
-	"github.com/iotexproject/iotex-core/ioctl/validator"
+	"github.com/iotexproject/iotex-core/v2/ioctl/output"
+	"github.com/iotexproject/iotex-core/v2/ioctl/validator"
 )
 
 // Regexp patterns
@@ -29,19 +29,35 @@ const (
 	_defaultEndpoint         = "api.iotex.one:443"
 	_defaultAnalyserEndpoint = "https://iotex-analyser-api-mainnet.chainanalytics.org"
 	// _defaultWsEndpoint default w3bstream endpoint
-	_defaultWsEndpoint = "sprout-staging.w3bstream.com:9000"
+	_defaultWsEndpoint = "https://sprout-testnet.w3bstream.com"
 	// _defaultIPFSEndpoint default IPFS endpoint for uploading
 	_defaultIPFSEndpoint = "ipfs.mainnet.iotex.io"
 	// _defaultIPFSGateway default IPFS gateway for resource fetching
 	_defaultIPFSGateway = "https://ipfs.io"
-	// _defaultWsRegisterContract  default project register contract address
-	_defaultWsRegisterContract = "0x184C72E39a642058CCBc369485c7fd614B40a03d"
+	// _defaultWsProjectRegisterContract  default project register contract address
+	_defaultWsProjectRegisterContract = "0x6325D51b6F8bC78b00c55e6233e8824231C31DE2"
+	// _defaultWsProjectStoreContract  default project store contract address
+	_defaultWsProjectStoreContract = "0x3522bBB40D94D5027aB585e1796a68BE003bF36b"
+	// _defaultWsFleetManagementContract  default fleet management contract address
+	_defaultWsFleetManagementContract = "0x7f23447c0bC51b0532EB0D2C7f2D123304666524"
+	// _defaultWsProverStoreContract  default prover store contract address
+	_defaultWsProverStoreContract = "0x1BCe261009e73A2300A6144d5900062De7fd8365"
+	// _defaultWsProjectDevicesContract  default project devices contract address
+	_defaultWsProjectDevicesContract = "0xEA0B75d277AE1D13BBeAAe4537291319E2d3d1C2"
+	// _defaultWsRouterContract default router contract address
+	_defaultWsRouterContract = "0x749C1856D7fdF7b4a2BEBDa6c16E335CE6b33bAe"
+	// _defaultWsVmTypeContract default vmType contract address
+	_defaultWsVmTypeContract = "0x3C296D654d33901F8c2D08386Bf438458c89dFaB"
+	// _defaultIoidProjectRegisterContract is the default ioID project register contract address
+	_defaultIoidProjectRegisterContract = "0x601B655c0a20FA1465C9a18e39387A33eEe7F777"
+	// _defaultIoidProjectStoreContract is the default ioID project store contract address
+	_defaultIoidProjectStoreContract = "0xa822Fd390e8eD3FEC80Bd26c77DD036935463b5E"
 )
 
 var (
 	_supportedLanguage = []string{"English", "中文"}
-	_validArgs         = []string{"endpoint", "wallet", "explorer", "defaultacc", "language", "nsv2height", "wsEndpoint", "ipfsEndpoint", "ipfsGateway", "wsRegisterContract"}
-	_validGetArgs      = []string{"endpoint", "wallet", "explorer", "defaultacc", "language", "nsv2height", "analyserEndpoint", "wsEndpoint", "ipfsEndpoint", "ipfsGateway", "wsRegisterContract", "all"}
+	_validArgs         = []string{"endpoint", "wallet", "explorer", "defaultacc", "language", "nsv2height", "wsEndpoint", "ipfsEndpoint", "ipfsGateway", "wsProjectRegisterContract", "wsProjectStoreContract", "wsFleetManagementContract", "wsProverStoreContract", "wsProjectDevicesContract", "wsRouterContract", "wsVmTypeContract"}
+	_validGetArgs      = []string{"endpoint", "wallet", "explorer", "defaultacc", "language", "nsv2height", "analyserEndpoint", "wsEndpoint", "ipfsEndpoint", "ipfsGateway", "wsProjectRegisterContract", "wsProjectStoreContract", "wsFleetManagementContract", "wsProverStoreContract", "wsProjectDevicesContract", "wsRouterContract", "wsVmTypeContract", "all"}
 	_validExpl         = []string{"iotexscan", "iotxplorer"}
 	_endpointCompile   = regexp.MustCompile("^" + _endpointPattern + "$")
 )
@@ -163,8 +179,20 @@ func Get(arg string) error {
 		fmt.Println(ReadConfig.IPFSEndpoint)
 	case "ipfsGateway":
 		fmt.Println(ReadConfig.IPFSGateway)
-	case "wsRegisterContract":
-		fmt.Println(ReadConfig.WsRegisterContract)
+	case "wsProjectRegisterContract":
+		fmt.Println(ReadConfig.WsProjectRegisterContract)
+	case "wsProjectStoreContract":
+		fmt.Println(ReadConfig.WsProjectStoreContract)
+	case "wsFleetManagementContract":
+		fmt.Println(ReadConfig.WsFleetManagementContract)
+	case "wsProverStoreContract":
+		fmt.Println(ReadConfig.WsProverStoreContract)
+	case "wsProjectDevicesContract":
+		fmt.Println(ReadConfig.WsProjectDevicesContract)
+	case "wsRouterContract":
+		fmt.Println(ReadConfig.WsRouterContract)
+	case "wsVmTypeContract":
+		fmt.Println(ReadConfig.WsVmTypeContract)
 	case "all":
 		fmt.Println(ReadConfig.String())
 	}
@@ -299,8 +327,20 @@ func set(args []string) error {
 		ReadConfig.IPFSEndpoint = args[1]
 	case "ipfsGateway":
 		ReadConfig.IPFSGateway = args[1]
-	case "wsRegisterContract":
-		ReadConfig.WsRegisterContract = args[1]
+	case "wsProjectRegisterContract":
+		ReadConfig.WsProjectRegisterContract = args[1]
+	case "wsProjectStoreContract":
+		ReadConfig.WsProjectStoreContract = args[1]
+	case "wsFleetManagementContract":
+		ReadConfig.WsFleetManagementContract = args[1]
+	case "wsProverStoreContract":
+		ReadConfig.WsProverStoreContract = args[1]
+	case "wsProjectDevicesContract":
+		ReadConfig.WsProjectDevicesContract = args[1]
+	case "wsRouterContract":
+		ReadConfig.WsRouterContract = args[1]
+	case "wsVmTypeContract":
+		ReadConfig.WsVmTypeContract = args[1]
 	}
 	err := writeConfig()
 	if err != nil {
@@ -322,7 +362,13 @@ func reset() error {
 	ReadConfig.WsEndpoint = _defaultWsEndpoint
 	ReadConfig.IPFSEndpoint = _defaultIPFSEndpoint
 	ReadConfig.IPFSGateway = _defaultIPFSGateway
-	ReadConfig.WsRegisterContract = _defaultWsRegisterContract
+	ReadConfig.WsProjectRegisterContract = _defaultWsProjectRegisterContract
+	ReadConfig.WsProjectStoreContract = _defaultWsProjectStoreContract
+	ReadConfig.WsFleetManagementContract = _defaultWsFleetManagementContract
+	ReadConfig.WsProverStoreContract = _defaultWsProverStoreContract
+	ReadConfig.WsProjectDevicesContract = _defaultWsProjectDevicesContract
+	ReadConfig.WsRouterContract = _defaultWsRouterContract
+	ReadConfig.WsVmTypeContract = _defaultWsVmTypeContract
 
 	err := writeConfig()
 	if err != nil {

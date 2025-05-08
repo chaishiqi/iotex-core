@@ -9,12 +9,13 @@ import (
 	reflect "reflect"
 
 	gomock "github.com/golang/mock/gomock"
-	address "github.com/iotexproject/iotex-address/address"
-	action "github.com/iotexproject/iotex-core/action"
-	protocol "github.com/iotexproject/iotex-core/action/protocol"
-	actpool "github.com/iotexproject/iotex-core/actpool"
-	block "github.com/iotexproject/iotex-core/blockchain/block"
-	state "github.com/iotexproject/iotex-core/state"
+	crypto "github.com/iotexproject/go-pkgs/crypto"
+	hash "github.com/iotexproject/go-pkgs/hash"
+	action "github.com/iotexproject/iotex-core/v2/action"
+	protocol "github.com/iotexproject/iotex-core/v2/action/protocol"
+	actpool "github.com/iotexproject/iotex-core/v2/actpool"
+	block "github.com/iotexproject/iotex-core/v2/blockchain/block"
+	state "github.com/iotexproject/iotex-core/v2/state"
 )
 
 // MockFactory is a mock of Factory interface.
@@ -40,20 +41,6 @@ func (m *MockFactory) EXPECT() *MockFactoryMockRecorder {
 	return m.recorder
 }
 
-// DeleteTipBlock mocks base method.
-func (m *MockFactory) DeleteTipBlock(arg0 context.Context, arg1 *block.Block) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteTipBlock", arg0, arg1)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// DeleteTipBlock indicates an expected call of DeleteTipBlock.
-func (mr *MockFactoryMockRecorder) DeleteTipBlock(arg0, arg1 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteTipBlock", reflect.TypeOf((*MockFactory)(nil).DeleteTipBlock), arg0, arg1)
-}
-
 // Height mocks base method.
 func (m *MockFactory) Height() (uint64, error) {
 	m.ctrl.T.Helper()
@@ -69,19 +56,19 @@ func (mr *MockFactoryMockRecorder) Height() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Height", reflect.TypeOf((*MockFactory)(nil).Height))
 }
 
-// NewBlockBuilder mocks base method.
-func (m *MockFactory) NewBlockBuilder(arg0 context.Context, arg1 actpool.ActPool, arg2 func(action.Envelope) (*action.SealedEnvelope, error)) (*block.Builder, error) {
+// Mint mocks base method.
+func (m *MockFactory) Mint(arg0 context.Context, arg1 actpool.ActPool, arg2 crypto.PrivateKey) (*block.Block, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "NewBlockBuilder", arg0, arg1, arg2)
-	ret0, _ := ret[0].(*block.Builder)
+	ret := m.ctrl.Call(m, "Mint", arg0, arg1, arg2)
+	ret0, _ := ret[0].(*block.Block)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// NewBlockBuilder indicates an expected call of NewBlockBuilder.
-func (mr *MockFactoryMockRecorder) NewBlockBuilder(arg0, arg1, arg2 interface{}) *gomock.Call {
+// Mint indicates an expected call of Mint.
+func (mr *MockFactoryMockRecorder) Mint(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewBlockBuilder", reflect.TypeOf((*MockFactory)(nil).NewBlockBuilder), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Mint", reflect.TypeOf((*MockFactory)(nil).Mint), arg0, arg1, arg2)
 }
 
 // PutBlock mocks base method.
@@ -98,26 +85,11 @@ func (mr *MockFactoryMockRecorder) PutBlock(arg0, arg1 interface{}) *gomock.Call
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PutBlock", reflect.TypeOf((*MockFactory)(nil).PutBlock), arg0, arg1)
 }
 
-// ReadContractStorage mocks base method.
-func (m *MockFactory) ReadContractStorage(arg0 context.Context, arg1 address.Address, arg2 []byte) ([]byte, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ReadContractStorage", arg0, arg1, arg2)
-	ret0, _ := ret[0].([]byte)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// ReadContractStorage indicates an expected call of ReadContractStorage.
-func (mr *MockFactoryMockRecorder) ReadContractStorage(arg0, arg1, arg2 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadContractStorage", reflect.TypeOf((*MockFactory)(nil).ReadContractStorage), arg0, arg1, arg2)
-}
-
 // ReadView mocks base method.
-func (m *MockFactory) ReadView(arg0 string) (interface{}, error) {
+func (m *MockFactory) ReadView(arg0 string) (protocol.View, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ReadView", arg0)
-	ret0, _ := ret[0].(interface{})
+	ret0, _ := ret[0].(protocol.View)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -140,22 +112,6 @@ func (m *MockFactory) Register(arg0 protocol.Protocol) error {
 func (mr *MockFactoryMockRecorder) Register(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Register", reflect.TypeOf((*MockFactory)(nil).Register), arg0)
-}
-
-// SimulateExecution mocks base method.
-func (m *MockFactory) SimulateExecution(arg0 context.Context, arg1 address.Address, arg2 *action.Execution) ([]byte, *action.Receipt, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SimulateExecution", arg0, arg1, arg2)
-	ret0, _ := ret[0].([]byte)
-	ret1, _ := ret[1].(*action.Receipt)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
-}
-
-// SimulateExecution indicates an expected call of SimulateExecution.
-func (mr *MockFactoryMockRecorder) SimulateExecution(arg0, arg1, arg2 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SimulateExecution", reflect.TypeOf((*MockFactory)(nil).SimulateExecution), arg0, arg1, arg2)
 }
 
 // Start mocks base method.
@@ -192,23 +148,19 @@ func (mr *MockFactoryMockRecorder) State(arg0 interface{}, arg1 ...interface{}) 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "State", reflect.TypeOf((*MockFactory)(nil).State), varargs...)
 }
 
-// StateAtHeight mocks base method.
-func (m *MockFactory) StateAtHeight(arg0 uint64, arg1 interface{}, arg2 ...protocol.StateOption) error {
+// StateReaderAt mocks base method.
+func (m *MockFactory) StateReaderAt(blkHeight uint64, blkHash hash.Hash256) (protocol.StateReader, error) {
 	m.ctrl.T.Helper()
-	varargs := []interface{}{arg0, arg1}
-	for _, a := range arg2 {
-		varargs = append(varargs, a)
-	}
-	ret := m.ctrl.Call(m, "StateAtHeight", varargs...)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret := m.ctrl.Call(m, "StateReaderAt", blkHeight, blkHash)
+	ret0, _ := ret[0].(protocol.StateReader)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
-// StateAtHeight indicates an expected call of StateAtHeight.
-func (mr *MockFactoryMockRecorder) StateAtHeight(arg0, arg1 interface{}, arg2 ...interface{}) *gomock.Call {
+// StateReaderAt indicates an expected call of StateReaderAt.
+func (mr *MockFactoryMockRecorder) StateReaderAt(blkHeight, blkHash interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	varargs := append([]interface{}{arg0, arg1}, arg2...)
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StateAtHeight", reflect.TypeOf((*MockFactory)(nil).StateAtHeight), varargs...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StateReaderAt", reflect.TypeOf((*MockFactory)(nil).StateReaderAt), blkHeight, blkHash)
 }
 
 // States mocks base method.
@@ -229,26 +181,6 @@ func (m *MockFactory) States(arg0 ...protocol.StateOption) (uint64, state.Iterat
 func (mr *MockFactoryMockRecorder) States(arg0 ...interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "States", reflect.TypeOf((*MockFactory)(nil).States), arg0...)
-}
-
-// StatesAtHeight mocks base method.
-func (m *MockFactory) StatesAtHeight(arg0 uint64, arg1 ...protocol.StateOption) (state.Iterator, error) {
-	m.ctrl.T.Helper()
-	varargs := []interface{}{arg0}
-	for _, a := range arg1 {
-		varargs = append(varargs, a)
-	}
-	ret := m.ctrl.Call(m, "StatesAtHeight", varargs...)
-	ret0, _ := ret[0].(state.Iterator)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// StatesAtHeight indicates an expected call of StatesAtHeight.
-func (mr *MockFactoryMockRecorder) StatesAtHeight(arg0 interface{}, arg1 ...interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	varargs := append([]interface{}{arg0}, arg1...)
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StatesAtHeight", reflect.TypeOf((*MockFactory)(nil).StatesAtHeight), varargs...)
 }
 
 // Stop mocks base method.
@@ -277,4 +209,39 @@ func (m *MockFactory) Validate(arg0 context.Context, arg1 *block.Block) error {
 func (mr *MockFactoryMockRecorder) Validate(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Validate", reflect.TypeOf((*MockFactory)(nil).Validate), arg0, arg1)
+}
+
+// WorkingSet mocks base method.
+func (m *MockFactory) WorkingSet(arg0 context.Context) (protocol.StateManager, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "WorkingSet", arg0)
+	ret0, _ := ret[0].(protocol.StateManager)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// WorkingSet indicates an expected call of WorkingSet.
+func (mr *MockFactoryMockRecorder) WorkingSet(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WorkingSet", reflect.TypeOf((*MockFactory)(nil).WorkingSet), arg0)
+}
+
+// WorkingSetAtHeight mocks base method.
+func (m *MockFactory) WorkingSetAtHeight(arg0 context.Context, arg1 uint64, arg2 ...*action.SealedEnvelope) (protocol.StateManager, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1}
+	for _, a := range arg2 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "WorkingSetAtHeight", varargs...)
+	ret0, _ := ret[0].(protocol.StateManager)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// WorkingSetAtHeight indicates an expected call of WorkingSetAtHeight.
+func (mr *MockFactoryMockRecorder) WorkingSetAtHeight(arg0, arg1 interface{}, arg2 ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1}, arg2...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WorkingSetAtHeight", reflect.TypeOf((*MockFactory)(nil).WorkingSetAtHeight), varargs...)
 }

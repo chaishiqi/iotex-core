@@ -19,10 +19,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/iotexproject/iotex-core/ioctl"
-	"github.com/iotexproject/iotex-core/ioctl/config"
-	"github.com/iotexproject/iotex-core/ioctl/util"
-	"github.com/iotexproject/iotex-core/ioctl/validator"
+	"github.com/iotexproject/iotex-core/v2/ioctl"
+	"github.com/iotexproject/iotex-core/v2/ioctl/config"
+	"github.com/iotexproject/iotex-core/v2/ioctl/util"
+	"github.com/iotexproject/iotex-core/v2/ioctl/validator"
 )
 
 // Multi-language support
@@ -135,7 +135,7 @@ type actionInfo struct {
 	Logs            []*iotextypes.Log `protobuf:"bytes,6,opt,name=logs,proto3" json:"logs,omitempty"`
 }
 
-// getActionInfoByBlock gets action info by block hash with start index and action count
+// getActionInfoWithinBlock gets action info by block hash with start index and action count
 func getActionInfoWithinBlock(cli *iotexapi.APIServiceClient, height uint64, count uint64) ([]*iotexapi.BlockInfo, error) {
 	request := iotexapi.GetRawBlocksRequest{StartHeight: height, Count: count, WithReceipts: true}
 	ctx := context.Background()

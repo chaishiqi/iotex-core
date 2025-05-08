@@ -12,16 +12,23 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
 )
 
 func initTestProtocol(t *testing.T) (*Protocol, []*Candidate) {
 	require := require.New(t)
-	p, err := NewProtocol(nil, &BuilderConfig{
-		Staking:                  genesis.Default.Staking,
+	g := genesis.TestDefault()
+	p, err := NewProtocol(HelperCtx{
+		DepositGas:    nil,
+		BlockInterval: getBlockInterval,
+	}, &BuilderConfig{
+		Staking:                  g.Staking,
 		PersistStakingPatchBlock: math.MaxUint64,
-	}, nil, nil, genesis.Default.GreenlandBlockHeight)
+		Revise: ReviseConfig{
+			VoteWeight: g.Staking.VoteWeightCalConsts,
+		},
+	}, nil, nil, nil)
 	require.NoError(err)
 
 	var cans []*Candidate

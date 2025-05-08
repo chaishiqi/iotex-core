@@ -13,19 +13,20 @@ import (
 	"github.com/pkg/errors"
 	uconfig "go.uber.org/config"
 
-	"github.com/iotexproject/iotex-core/actpool"
-	"github.com/iotexproject/iotex-core/api"
-	"github.com/iotexproject/iotex-core/blockchain"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/blockindex"
-	"github.com/iotexproject/iotex-core/blocksync"
-	"github.com/iotexproject/iotex-core/consensus"
-	"github.com/iotexproject/iotex-core/consensus/consensusfsm"
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/dispatcher"
-	"github.com/iotexproject/iotex-core/nodeinfo"
-	"github.com/iotexproject/iotex-core/p2p"
-	"github.com/iotexproject/iotex-core/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/actpool"
+	"github.com/iotexproject/iotex-core/v2/actsync"
+	"github.com/iotexproject/iotex-core/v2/api"
+	"github.com/iotexproject/iotex-core/v2/blockchain"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/blockindex"
+	"github.com/iotexproject/iotex-core/v2/blocksync"
+	"github.com/iotexproject/iotex-core/v2/consensus"
+	"github.com/iotexproject/iotex-core/v2/consensus/consensusfsm"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/dispatcher"
+	"github.com/iotexproject/iotex-core/v2/nodeinfo"
+	"github.com/iotexproject/iotex-core/v2/p2p"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
 )
 
 // IMPORTANT: to define a config, add a field or a new config type to the existing config types. In addition, provide
@@ -67,6 +68,7 @@ var (
 		ActPool:            actpool.DefaultConfig,
 		Consensus:          consensus.DefaultConfig,
 		DardanellesUpgrade: consensusfsm.DefaultDardanellesUpgradeConfig,
+		WakeUpgrade:        consensusfsm.DefaultWakeUpgradeConfig,
 		BlockSync:          blocksync.DefaultConfig,
 		Dispatcher:         dispatcher.DefaultConfig,
 		API:                api.DefaultConfig,
@@ -78,10 +80,11 @@ var (
 			StartSubChainInterval: 10 * time.Second,
 			SystemLogDBPath:       "/var/log",
 		},
-		DB:       db.DefaultConfig,
-		Indexer:  blockindex.DefaultConfig,
-		Genesis:  genesis.Default,
-		NodeInfo: nodeinfo.DefaultConfig,
+		DB:         db.DefaultConfig,
+		Indexer:    blockindex.DefaultConfig,
+		Genesis:    genesis.Default,
+		NodeInfo:   nodeinfo.DefaultConfig,
+		ActionSync: actsync.DefaultConfig,
 	}
 
 	// ErrInvalidCfg indicates the invalid config value
@@ -90,7 +93,6 @@ var (
 	// Validates is the collection config validation functions
 	Validates = []Validate{
 		ValidateRollDPoS,
-		ValidateArchiveMode,
 		ValidateDispatcher,
 		ValidateAPI,
 		ValidateActPool,
@@ -123,6 +125,7 @@ type (
 		ActPool            actpool.Config                  `yaml:"actPool"`
 		Consensus          consensus.Config                `yaml:"consensus"`
 		DardanellesUpgrade consensusfsm.DardanellesUpgrade `yaml:"dardanellesUpgrade"`
+		WakeUpgrade        consensusfsm.WakeUpgrade        `yaml:"wakeUpgrade"`
 		BlockSync          blocksync.Config                `yaml:"blockSync"`
 		Dispatcher         dispatcher.Config               `yaml:"dispatcher"`
 		API                api.Config                      `yaml:"api"`
@@ -133,6 +136,7 @@ type (
 		SubLogs            map[string]log.GlobalConfig     `yaml:"subLogs"`
 		Genesis            genesis.Genesis                 `yaml:"genesis"`
 		NodeInfo           nodeinfo.Config                 `yaml:"nodeinfo"`
+		ActionSync         actsync.Config                  `yaml:"actionSync"`
 	}
 
 	// Validate is the interface of validating the config
@@ -164,6 +168,8 @@ func New(configPaths []string, _plugins []string, validates ...Validate) (Config
 	if err := cfg.Chain.SetProducerPrivKey(); err != nil {
 		return Config{}, errors.Wrap(err, "failed to set producer private key")
 	}
+	// set default value for mint timeout
+	cfg.Chain.MintTimeout = Default.Chain.MintTimeout
 
 	// set network master key to private key
 	if cfg.Network.MasterKey == "" {
@@ -249,15 +255,6 @@ func ValidateRollDPoS(cfg Config) error {
 	return nil
 }
 
-// ValidateArchiveMode validates the state factory setting
-func ValidateArchiveMode(cfg Config) error {
-	if !cfg.Chain.EnableArchiveMode || !cfg.Chain.EnableTrielessStateDB {
-		return nil
-	}
-
-	return errors.Wrap(ErrInvalidCfg, "Archive mode is incompatible with trieless state DB")
-}
-
 // ValidateAPI validates the api configs
 func ValidateAPI(cfg Config) error {
 	if cfg.API.TpsWindow <= 0 {
@@ -333,6 +330,10 @@ func ValidateForkHeights(cfg Config) error {
 		return errors.Wrap(ErrInvalidCfg, "Sumatra is heigher than Tsunami")
 	case hu.TsunamiBlockHeight > hu.UpernavikBlockHeight:
 		return errors.Wrap(ErrInvalidCfg, "Tsunami is heigher than Upernavik")
+	case hu.UpernavikBlockHeight > hu.VanuatuBlockHeight:
+		return errors.Wrap(ErrInvalidCfg, "Upernavik is heigher than Vanuatu")
+	case hu.VanuatuBlockHeight > hu.WakeBlockHeight:
+		return errors.Wrap(ErrInvalidCfg, "Vanuatu is heigher than Wake")
 	}
 	return nil
 }

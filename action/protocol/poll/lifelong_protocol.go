@@ -13,13 +13,13 @@ import (
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/rolldpos"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/crypto"
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/state"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rolldpos"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/crypto"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/state"
 )
 
 type lifeLongDelegatesProtocol struct {
@@ -62,15 +62,15 @@ func (p *lifeLongDelegatesProtocol) CreateGenesisStates(
 	return setCandidates(ctx, sm, nil, p.delegates, uint64(1))
 }
 
-func (p *lifeLongDelegatesProtocol) Handle(ctx context.Context, act action.Action, sm protocol.StateManager) (*action.Receipt, error) {
-	if err := validate(ctx, sm, p, act); err != nil {
+func (p *lifeLongDelegatesProtocol) Handle(ctx context.Context, elp action.Envelope, sm protocol.StateManager) (*action.Receipt, error) {
+	if err := validate(ctx, sm, p, elp.Action()); err != nil {
 		return nil, err
 	}
-	return handle(ctx, act, sm, nil, p.addr.String())
+	return handle(ctx, elp.Action(), sm, nil, p.addr.String())
 }
 
-func (p *lifeLongDelegatesProtocol) Validate(ctx context.Context, act action.Action, sr protocol.StateReader) error {
-	return validate(ctx, sr, p, act)
+func (p *lifeLongDelegatesProtocol) Validate(ctx context.Context, elp action.Envelope, sr protocol.StateReader) error {
+	return validate(ctx, sr, p, elp.Action())
 }
 
 func (p *lifeLongDelegatesProtocol) CalculateCandidatesByHeight(ctx context.Context, _ protocol.StateReader, _ uint64) (state.CandidateList, error) {

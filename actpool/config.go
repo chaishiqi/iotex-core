@@ -4,8 +4,8 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/pkg/unit"
+	"github.com/iotexproject/iotex-core/v2/pkg/log"
+	"github.com/iotexproject/iotex-core/v2/pkg/unit"
 )
 
 var (
@@ -18,6 +18,10 @@ var (
 		ActionExpiry:       10 * time.Minute,
 		MinGasPriceStr:     big.NewInt(unit.Qev).String(),
 		BlackList:          []string{},
+		MaxNumBlobsPerAcct: 16,
+		Store: &StoreConfig{
+			Datadir: "/var/data/actpool.cache",
+		},
 	}
 )
 
@@ -37,6 +41,10 @@ type Config struct {
 	MinGasPriceStr string `yaml:"minGasPrice"`
 	// BlackList lists the account address that are banned from initiating actions
 	BlackList []string `yaml:"blackList"`
+	// Store defines the config for persistent cache
+	Store *StoreConfig `yaml:"store"`
+	// MaxNumBlobsPerAcct defines the maximum number of blob txs an account can have
+	MaxNumBlobsPerAcct uint64 `yaml:"maxNumBlobsPerAcct"`
 }
 
 // MinGasPrice returns the minimal gas price threshold
@@ -46,4 +54,9 @@ func (ap Config) MinGasPrice() *big.Int {
 		log.S().Panicf("Error when parsing minimal gas price string: %s", ap.MinGasPriceStr)
 	}
 	return mgp
+}
+
+// StoreConfig is the configuration for the blob store
+type StoreConfig struct {
+	Datadir string `yaml:"datadir"` // Data directory containing the currently executable blobs
 }

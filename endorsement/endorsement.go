@@ -13,7 +13,7 @@ import (
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/iotexproject/iotex-core/pkg/util/byteutil"
+	"github.com/iotexproject/iotex-core/v2/pkg/util/byteutil"
 )
 
 type (
@@ -64,19 +64,23 @@ func NewEndorsement(
 
 // Endorse endorses a document
 func Endorse(
-	signer crypto.PrivateKey,
 	doc Document,
 	ts time.Time,
-) (*Endorsement, error) {
+	signers ...crypto.PrivateKey,
+) ([]*Endorsement, error) {
 	hash, err := hashDocWithTime(doc, ts)
 	if err != nil {
 		return nil, err
 	}
-	sig, err := signer.Sign(hash)
-	if err != nil {
-		return nil, err
+	endorsements := make([]*Endorsement, 0, len(signers))
+	for _, signer := range signers {
+		sig, err := signer.Sign(hash)
+		if err != nil {
+			return nil, err
+		}
+		endorsements = append(endorsements, NewEndorsement(ts, signer.PublicKey(), sig))
 	}
-	return NewEndorsement(ts, signer.PublicKey(), sig), nil
+	return endorsements, nil
 }
 
 // VerifyEndorsedDocument checks an endorsed document
@@ -113,13 +117,13 @@ func (en *Endorsement) Signature() []byte {
 }
 
 // Proto converts an endorsement to protobuf message
-func (en *Endorsement) Proto() (*iotextypes.Endorsement, error) {
+func (en *Endorsement) Proto() *iotextypes.Endorsement {
 	ts := timestamppb.New(en.ts)
 	return &iotextypes.Endorsement{
 		Timestamp: ts,
 		Endorser:  en.endorser.Bytes(),
 		Signature: en.Signature(),
-	}, nil
+	}
 }
 
 // LoadProto converts a protobuf message to endorsement

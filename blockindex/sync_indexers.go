@@ -8,8 +8,8 @@ package blockindex
 import (
 	"context"
 
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/blockdao"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/blockdao"
 )
 
 // SyncIndexers is a special index that includes multiple indexes,
@@ -63,16 +63,6 @@ func (ig *SyncIndexers) PutBlock(ctx context.Context, blk *block.Block) error {
 		}
 		// put block
 		if err := indexer.PutBlock(ctx, blk); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// DeleteTipBlock deletes the tip block from the indexers in the group
-func (ig *SyncIndexers) DeleteTipBlock(ctx context.Context, blk *block.Block) error {
-	for _, indexer := range ig.indexers {
-		if err := indexer.DeleteTipBlock(ctx, blk); err != nil {
 			return err
 		}
 	}

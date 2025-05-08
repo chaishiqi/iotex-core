@@ -26,25 +26,25 @@ import (
 	"github.com/iotexproject/iotex-election/test/mock/mock_committee"
 	"github.com/iotexproject/iotex-election/types"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/action/protocol/account"
-	accountutil "github.com/iotexproject/iotex-core/action/protocol/account/util"
-	"github.com/iotexproject/iotex-core/action/protocol/execution/evm"
-	"github.com/iotexproject/iotex-core/action/protocol/poll"
-	"github.com/iotexproject/iotex-core/action/protocol/rewarding"
-	"github.com/iotexproject/iotex-core/action/protocol/rolldpos"
-	"github.com/iotexproject/iotex-core/action/protocol/vote/candidatesutil"
-	"github.com/iotexproject/iotex-core/blockchain"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/pkg/enc"
-	"github.com/iotexproject/iotex-core/pkg/util/fileutil"
-	"github.com/iotexproject/iotex-core/state"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/test/mock/mock_actpool"
-	"github.com/iotexproject/iotex-core/testutil"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/account"
+	accountutil "github.com/iotexproject/iotex-core/v2/action/protocol/account/util"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/execution/evm"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/poll"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rewarding"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/rolldpos"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/vote/candidatesutil"
+	"github.com/iotexproject/iotex-core/v2/blockchain"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/pkg/enc"
+	"github.com/iotexproject/iotex-core/v2/pkg/util/fileutil"
+	"github.com/iotexproject/iotex-core/v2/state"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/test/mock/mock_actpool"
+	"github.com/iotexproject/iotex-core/v2/testutil"
 )
 
 const (
@@ -64,40 +64,9 @@ func randStringRunes(n int) string {
 
 func TestGenerateConfig(t *testing.T) {
 	require := require.New(t)
-	cfg := GenerateConfig(blockchain.DefaultConfig, genesis.Default)
+	cfg := GenerateConfig(blockchain.DefaultConfig, genesis.TestDefault())
 	require.Equal(27, len(cfg.Genesis.InitBalanceMap))
 	require.Equal(blockchain.DefaultConfig.ChainDBPath, cfg.Chain.ChainDBPath)
-}
-
-func TestSnapshot(t *testing.T) {
-	require := require.New(t)
-	testTriePath, err := testutil.PathOfTempFile(_triePath)
-	require.NoError(err)
-
-	cfg := DefaultConfig
-	db1, err := db.CreateKVStore(db.DefaultConfig, testTriePath)
-	require.NoError(err)
-
-	cfg.Genesis.InitBalanceMap[identityset.Address(28).String()] = "5"
-	cfg.Genesis.InitBalanceMap[identityset.Address(29).String()] = "7"
-	registry := protocol.NewRegistry()
-	sf, err := NewFactory(cfg, db1, RegistryOption(registry))
-	require.NoError(err)
-	acc := account.NewProtocol(rewarding.DepositGas)
-	require.NoError(acc.Register(registry))
-	ctx := protocol.WithBlockCtx(
-		genesis.WithGenesisContext(context.Background(), cfg.Genesis),
-		protocol.BlockCtx{},
-	)
-	require.NoError(sf.Start(ctx))
-	defer func() {
-		require.NoError(sf.Stop(ctx))
-		testutil.CleanupPath(testTriePath)
-	}()
-	ws, err := sf.(workingSetCreator).newWorkingSet(ctx, 1)
-	require.NoError(err)
-	testSnapshot(ws, t)
-	testRevert(ws, t)
 }
 
 func TestSDBSnapshot(t *testing.T) {
@@ -226,13 +195,6 @@ func testSnapshot(ws *workingSet, t *testing.T) {
 	require.Equal(big.NewInt(5), s.Balance)
 }
 
-func TestCandidates(t *testing.T) {
-	cfg := DefaultConfig
-	sf, err := NewFactory(cfg, db.NewMemKVStore(), SkipBlockValidationOption())
-	require.NoError(t, err)
-	testCandidates(sf, t)
-}
-
 func TestSDBCandidates(t *testing.T) {
 	cfg := DefaultConfig
 	sdb, err := NewStateDB(cfg, db.NewMemKVStore(), SkipBlockValidationStateDBOption())
@@ -255,11 +217,9 @@ func testCandidates(sf Factory, t *testing.T) {
 			CanName:       c.Name(),
 		})
 	}
-	act := action.NewPutPollResult(1, 1, sc)
-	bd := &action.EnvelopeBuilder{}
-	elp := bd.SetGasLimit(uint64(100000)).
-		SetGasPrice(big.NewInt(10)).
-		SetAction(act).Build()
+	act := action.NewPutPollResult(1, sc)
+	elp := (&action.EnvelopeBuilder{}).SetNonce(1).SetGasLimit(uint64(100000)).
+		SetGasPrice(big.NewInt(10)).SetAction(act).Build()
 	selp, err := action.Sign(elp, identityset.PrivateKey(27))
 	require.NoError(t, err)
 	require.NotNil(t, selp)
@@ -282,7 +242,6 @@ func testCandidates(sf Factory, t *testing.T) {
 		nil,
 		cfg.Genesis.NumCandidateDelegates,
 		cfg.Genesis.NumDelegates,
-		cfg.Genesis.DardanellesNumSubEpochs,
 		cfg.Genesis.ProductivityThreshold,
 		cfg.Genesis.ProbationEpochPeriod,
 		cfg.Genesis.UnproductiveDelegateMaxCacheSize,
@@ -332,7 +291,9 @@ func testCandidates(sf Factory, t *testing.T) {
 					},
 				),
 				protocol.BlockchainCtx{
-					ChainID: 1,
+					ChainID:      1,
+					GetBlockHash: func(uint64) (hash.Hash256, error) { return hash.ZeroHash256, nil },
+					GetBlockTime: func(uint64) (time.Time, error) { return time.Now(), nil },
 				},
 			),
 		),
@@ -346,87 +307,34 @@ func testCandidates(sf Factory, t *testing.T) {
 	}
 }
 
-func TestState(t *testing.T) {
-	testTriePath, err := testutil.PathOfTempFile(_triePath)
-	require.NoError(t, err)
-	defer testutil.CleanupPath(testTriePath)
-
-	cfg := DefaultConfig
-	db1, err := db.CreateKVStore(db.DefaultConfig, testTriePath)
-	require.NoError(t, err)
-	sf, err := NewFactory(cfg, db1, SkipBlockValidationOption())
-	require.NoError(t, err)
-	testState(sf, t)
-}
-
 func TestHistoryState(t *testing.T) {
 	r := require.New(t)
-	var err error
 	// using factory and enable history
 	cfg := DefaultConfig
-	cfg.Chain.TrieDBPath, err = testutil.PathOfTempFile(_triePath)
-	r.NoError(err)
-	cfg.Chain.EnableArchiveMode = true
-	db1, err := db.CreateKVStore(db.DefaultConfig, cfg.Chain.TrieDBPath)
-	r.NoError(err)
-	sf, err := NewFactory(cfg, db1, SkipBlockValidationOption())
-	r.NoError(err)
-	testHistoryState(sf, t, false, cfg.Chain.EnableArchiveMode)
 
 	// using stateDB and enable history
-	cfg.Chain.TrieDBPath, err = testutil.PathOfTempFile(_triePath)
+	file2, err := testutil.PathOfTempFile(_triePath)
 	r.NoError(err)
+	cfg.Chain.TrieDBPath = file2
 	db2, err := db.CreateKVStoreWithCache(db.DefaultConfig, cfg.Chain.TrieDBPath, cfg.Chain.StateDBCacheSize)
 	r.NoError(err)
-	sf, err = NewStateDB(cfg, db2, SkipBlockValidationStateDBOption())
+	sf, err := NewStateDB(cfg, db2, SkipBlockValidationStateDBOption())
 	r.NoError(err)
 	testHistoryState(sf, t, true, cfg.Chain.EnableArchiveMode)
 
-	// using factory and disable history
-	cfg.Chain.TrieDBPath, err = testutil.PathOfTempFile(_triePath)
-	r.NoError(err)
-	cfg.Chain.EnableArchiveMode = false
-	db1, err = db.CreateKVStore(db.DefaultConfig, cfg.Chain.TrieDBPath)
-	r.NoError(err)
-	sf, err = NewFactory(cfg, db1, SkipBlockValidationOption())
-	r.NoError(err)
-	testHistoryState(sf, t, false, cfg.Chain.EnableArchiveMode)
-
 	// using stateDB and disable history
-	cfg.Chain.TrieDBPath, err = testutil.PathOfTempFile(_triePath)
+	file4, err := testutil.PathOfTempFile(_triePath)
 	r.NoError(err)
+	cfg.Chain.TrieDBPath = file4
 	db2, err = db.CreateKVStoreWithCache(db.DefaultConfig, cfg.Chain.TrieDBPath, cfg.Chain.StateDBCacheSize)
 	r.NoError(err)
 	sf, err = NewStateDB(cfg, db2, SkipBlockValidationStateDBOption())
 	r.NoError(err)
 	testHistoryState(sf, t, true, cfg.Chain.EnableArchiveMode)
 	defer func() {
-		testutil.CleanupPath(cfg.Chain.TrieDBPath)
+		testutil.CleanupPath(file2)
+		testutil.CleanupPath(file4)
 	}()
-}
-
-func TestFactoryStates(t *testing.T) {
-	r := require.New(t)
-	var err error
-	cfg := DefaultConfig
-	// using factory
-	cfg.Chain.TrieDBPath, err = testutil.PathOfTempFile(_triePath)
-	r.NoError(err)
-	db1, err := db.CreateKVStore(db.DefaultConfig, cfg.Chain.TrieDBPath)
-	r.NoError(err)
-	sf, err := NewFactory(cfg, db1, SkipBlockValidationOption())
-	r.NoError(err)
-	testFactoryStates(sf, t)
-
-	// using stateDB
-	cfg.Chain.TrieDBPath, err = testutil.PathOfTempFile(_triePath)
-	r.NoError(err)
-	db2, err := db.CreateKVStoreWithCache(db.DefaultConfig, cfg.Chain.TrieDBPath, cfg.Chain.StateDBCacheSize)
-	r.NoError(err)
-	sf, err = NewStateDB(cfg, db2, SkipBlockValidationStateDBOption())
-	r.NoError(err)
-	testFactoryStates(sf, t)
-	defer testutil.CleanupPath(cfg.Chain.TrieDBPath)
 }
 
 func TestSDBState(t *testing.T) {
@@ -449,7 +357,7 @@ func testState(sf Factory, t *testing.T) {
 	priKeyA := identityset.PrivateKey(28)
 	acc := account.NewProtocol(rewarding.DepositGas)
 	require.NoError(t, sf.Register(acc))
-	ge := genesis.Default
+	ge := genesis.TestDefault()
 	ge.InitBalanceMap[a.String()] = "100"
 	gasLimit := uint64(1000000)
 	ctx := protocol.WithBlockchainCtx(protocol.WithBlockCtx(
@@ -469,8 +377,7 @@ func testState(sf Factory, t *testing.T) {
 		require.NoError(t, sf.Stop(ctx))
 	}()
 
-	tsf, err := action.NewTransfer(1, big.NewInt(10), identityset.Address(31).String(), nil, uint64(20000), big.NewInt(0))
-	require.NoError(t, err)
+	tsf := action.NewTransfer(big.NewInt(10), identityset.Address(31).String(), nil)
 	bd := &action.EnvelopeBuilder{}
 	elp := bd.SetAction(tsf).SetGasLimit(20000).SetNonce(1).Build()
 	selp, err := action.Sign(elp, priKeyA)
@@ -483,6 +390,7 @@ func testState(sf Factory, t *testing.T) {
 			GasLimit:    gasLimit,
 		},
 	)
+	ctx = protocol.WithFeatureCtx(ctx)
 	blk, err := block.NewTestingBuilder().
 		SetHeight(1).
 		SetPrevBlockHash(hash.ZeroHash256).
@@ -510,7 +418,7 @@ func testHistoryState(sf Factory, t *testing.T, statetx, archive bool) {
 	priKeyA := identityset.PrivateKey(28)
 	acc := account.NewProtocol(rewarding.DepositGas)
 	require.NoError(t, sf.Register(acc))
-	ge := genesis.Default
+	ge := genesis.TestDefault()
 	ge.InitBalanceMap[a.String()] = "100"
 	gasLimit := uint64(1000000)
 	ctx := protocol.WithBlockCtx(
@@ -533,8 +441,7 @@ func testHistoryState(sf Factory, t *testing.T, statetx, archive bool) {
 	require.NoError(t, err)
 	require.Equal(t, big.NewInt(100), accountA.Balance)
 	require.Equal(t, big.NewInt(0), accountB.Balance)
-	tsf, err := action.NewTransfer(1, big.NewInt(10), b.String(), nil, uint64(20000), big.NewInt(0))
-	require.NoError(t, err)
+	tsf := action.NewTransfer(big.NewInt(10), b.String(), nil)
 	bd := &action.EnvelopeBuilder{}
 	elp := bd.SetAction(tsf).SetGasLimit(20000).SetNonce(1).Build()
 	selp, err := action.Sign(elp, priKeyA)
@@ -550,6 +457,7 @@ func testHistoryState(sf Factory, t *testing.T, statetx, archive bool) {
 	ctx = protocol.WithBlockchainCtx(ctx, protocol.BlockchainCtx{
 		ChainID: 1,
 	})
+	ctx = protocol.WithFeatureCtx(ctx)
 	blk, err := block.NewTestingBuilder().
 		SetHeight(1).
 		SetPrevBlockHash(hash.ZeroHash256).
@@ -569,21 +477,24 @@ func testHistoryState(sf Factory, t *testing.T, statetx, archive bool) {
 
 	// check archive data
 	if statetx {
-		// statetx not support archive mode
-		_, err = accountutil.AccountState(ctx, NewHistoryStateReader(sf, 0), a)
-		require.Equal(t, ErrNotSupported, errors.Cause(err))
-		_, err = accountutil.AccountState(ctx, NewHistoryStateReader(sf, 0), b)
-		require.Equal(t, ErrNotSupported, errors.Cause(err))
+		// statetx not support archive mode yet
+		_, err = sf.WorkingSetAtHeight(ctx, 0)
+		require.NoError(t, err)
 	} else {
+		_, err = sf.WorkingSetAtHeight(ctx, 10)
 		if !archive {
-			_, err = accountutil.AccountState(ctx, NewHistoryStateReader(sf, 0), a)
-			require.Equal(t, ErrNoArchiveData, errors.Cause(err))
-			_, err = accountutil.AccountState(ctx, NewHistoryStateReader(sf, 0), b)
 			require.Equal(t, ErrNoArchiveData, errors.Cause(err))
 		} else {
-			accountA, err = accountutil.AccountState(ctx, NewHistoryStateReader(sf, 0), a)
+			require.Contains(t, err.Error(), "query height 10 is higher than tip height 1")
+		}
+		sr, err := sf.WorkingSetAtHeight(ctx, 0)
+		if !archive {
+			require.Equal(t, ErrNoArchiveData, errors.Cause(err))
+		} else {
 			require.NoError(t, err)
-			accountB, err = accountutil.AccountState(ctx, NewHistoryStateReader(sf, 0), b)
+			accountA, err = accountutil.AccountState(ctx, sr, a)
+			require.NoError(t, err)
+			accountB, err = accountutil.AccountState(ctx, sr, b)
 			require.NoError(t, err)
 			require.Equal(t, big.NewInt(100), accountA.Balance)
 			require.Equal(t, big.NewInt(0), accountB.Balance)
@@ -598,7 +509,7 @@ func testFactoryStates(sf Factory, t *testing.T) {
 	priKeyA := identityset.PrivateKey(28)
 	acc := account.NewProtocol(rewarding.DepositGas)
 	require.NoError(t, sf.Register(acc))
-	ge := genesis.Default
+	ge := genesis.TestDefault()
 	ge.InitBalanceMap = make(map[string]string)
 	ge.InitBalanceMap[a] = "100"
 	ge.InitBalanceMap[b] = "100"
@@ -617,8 +528,7 @@ func testFactoryStates(sf Factory, t *testing.T) {
 	defer func() {
 		require.NoError(t, sf.Stop(ctx))
 	}()
-	tsf, err := action.NewTransfer(1, big.NewInt(10), b, nil, uint64(20000), big.NewInt(0))
-	require.NoError(t, err)
+	tsf := action.NewTransfer(big.NewInt(10), b, nil)
 	bd := &action.EnvelopeBuilder{}
 	elp := bd.SetAction(tsf).SetGasLimit(20000).SetNonce(1).Build()
 	selp, err := action.Sign(elp, priKeyA)
@@ -634,6 +544,7 @@ func testFactoryStates(sf Factory, t *testing.T) {
 	ctx = protocol.WithBlockchainCtx(ctx, protocol.BlockchainCtx{
 		ChainID: 1,
 	})
+	ctx = protocol.WithFeatureCtx(ctx)
 	blk, err := block.NewTestingBuilder().
 		SetHeight(1).
 		SetPrevBlockHash(hash.ZeroHash256).
@@ -652,57 +563,54 @@ func testFactoryStates(sf Factory, t *testing.T) {
 	height, iter, err := sf.States()
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), height)
-	// two accounts and one CurrentHeightKey
-	require.Equal(t, 3, iter.Size())
+	// two accounts
+	require.LessOrEqual(t, 2, iter.Size())
 	accounts := make([]*state.Account, 0)
 	for i := 0; i < iter.Size(); i++ {
 		c := &state.Account{}
-		err = iter.Next(c)
+		_, err = iter.Next(c)
 		if err != nil {
 			continue
 		}
 		accounts = append(accounts, c)
 	}
-	require.Equal(t, uint64(90), accounts[0].Balance.Uint64())
-	require.Equal(t, uint64(110), accounts[1].Balance.Uint64())
+	require.Equal(t, uint64(200), accounts[0].Balance.Uint64()+accounts[1].Balance.Uint64())
 
 	// case III: check without cond,with AccountKVNamespace namespace,key not exists
 	namespaceOpt := protocol.NamespaceOption(AccountKVNamespace)
 	height, iter, err = sf.States(namespaceOpt)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), height)
-	// two accounts and one CurrentHeightKey
-	require.Equal(t, 3, iter.Size())
+	// two accounts
+	require.LessOrEqual(t, 2, iter.Size())
 	accounts = make([]*state.Account, 0)
 	for i := 0; i < iter.Size(); i++ {
 		c := &state.Account{}
-		err = iter.Next(c)
+		_, err = iter.Next(c)
 		if err != nil {
 			continue
 		}
 		accounts = append(accounts, c)
 	}
-	require.Equal(t, uint64(90), accounts[0].Balance.Uint64())
-	require.Equal(t, uint64(110), accounts[1].Balance.Uint64())
+	require.Equal(t, uint64(200), accounts[0].Balance.Uint64()+accounts[1].Balance.Uint64())
 
 	// case IV: check without cond,with AccountKVNamespace namespace
 	namespaceOpt = protocol.NamespaceOption(AccountKVNamespace)
 	height, iter, err = sf.States(namespaceOpt)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), height)
-	// two accounts and one CurrentHeightKey
-	require.Equal(t, 3, iter.Size())
+	// two accounts
+	require.LessOrEqual(t, 2, iter.Size())
 	accounts = make([]*state.Account, 0)
 	for i := 0; i < iter.Size(); i++ {
 		c := &state.Account{}
-		err = iter.Next(c)
+		_, err = iter.Next(c)
 		if err != nil {
 			continue
 		}
 		accounts = append(accounts, c)
 	}
-	require.Equal(t, uint64(90), accounts[0].Balance.Uint64())
-	require.Equal(t, uint64(110), accounts[1].Balance.Uint64())
+	require.Equal(t, uint64(200), accounts[0].Balance.Uint64()+accounts[1].Balance.Uint64())
 
 	// case V: check cond,with AccountKVNamespace namespace
 	namespaceOpt = protocol.NamespaceOption(AccountKVNamespace)
@@ -716,29 +624,11 @@ func testFactoryStates(sf Factory, t *testing.T) {
 	accounts = make([]*state.Account, 0)
 	for i := 0; i < iter.Size(); i++ {
 		c := &state.Account{}
-		require.NoError(t, iter.Next(c))
+		_, err = iter.Next(c)
+		require.NoError(t, err)
 		accounts = append(accounts, c)
 	}
 	require.Equal(t, uint64(90), accounts[0].Balance.Uint64())
-}
-
-func TestNonce(t *testing.T) {
-	testTriePath, err := testutil.PathOfTempFile(_triePath)
-	require.NoError(t, err)
-	defer testutil.CleanupPath(testTriePath)
-
-	cfg := DefaultConfig
-	db1, err := db.CreateKVStore(db.DefaultConfig, testTriePath)
-	require.NoError(t, err)
-
-	reg := protocol.NewRegistry()
-	acc := account.NewProtocol(rewarding.DepositGas)
-	err = acc.Register(reg)
-	require.NoError(t, err)
-
-	sf, err := NewFactory(cfg, db1, SkipBlockValidationOption(), RegistryOption(reg))
-	require.NoError(t, err)
-	testNonce(protocol.WithRegistry(context.Background(), reg), sf, t)
 }
 
 func TestSDBNonce(t *testing.T) {
@@ -768,7 +658,7 @@ func testNonce(ctx context.Context, sf Factory, t *testing.T) {
 	a := identityset.Address(28)
 	priKeyA := identityset.PrivateKey(28)
 	b := identityset.Address(29).String()
-	ge := genesis.Default
+	ge := genesis.TestDefault()
 	ge.InitBalanceMap[a.String()] = "100"
 	gasLimit := uint64(1000000)
 	ctx = protocol.WithBlockCtx(ctx,
@@ -786,10 +676,9 @@ func testNonce(ctx context.Context, sf Factory, t *testing.T) {
 	ws, err := sf.(workingSetCreator).newWorkingSet(ctx, 1)
 	require.NoError(t, err)
 
-	tx, err := action.NewTransfer(0, big.NewInt(2), b, nil, uint64(20000), big.NewInt(0))
-	require.NoError(t, err)
+	tx := action.NewTransfer(big.NewInt(2), b, nil)
 	bd := &action.EnvelopeBuilder{}
-	elp := bd.SetAction(tx).SetNonce(0).SetGasLimit(20000).Build()
+	elp := bd.SetAction(tx).SetGasLimit(20000).Build()
 	selp, err := action.Sign(elp, priKeyA)
 	require.NoError(t, err)
 
@@ -822,8 +711,7 @@ func testNonce(ctx context.Context, sf Factory, t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), state.PendingNonce())
 
-	tx, err = action.NewTransfer(1, big.NewInt(2), b, nil, uint64(20000), big.NewInt(0))
-	require.NoError(t, err)
+	tx = action.NewTransfer(big.NewInt(2), b, nil)
 	bd = &action.EnvelopeBuilder{}
 	elp = bd.SetAction(tx).SetNonce(1).SetGasLimit(20000).Build()
 	selp, err = action.Sign(elp, priKeyA)
@@ -841,34 +729,6 @@ func testNonce(ctx context.Context, sf Factory, t *testing.T) {
 	state, err = accountutil.AccountState(ctx, sf, a)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), state.PendingNonce())
-}
-
-func TestLoadStoreHeight(t *testing.T) {
-	testTriePath, err := testutil.PathOfTempFile(_triePath)
-	require.NoError(t, err)
-	defer testutil.CleanupPath(testTriePath)
-
-	cfg := DefaultConfig
-	cfg.Chain.TrieDBPath = testTriePath
-
-	db1, err := db.CreateKVStore(db.DefaultConfig, cfg.Chain.TrieDBPath)
-	require.NoError(t, err)
-	statefactory, err := NewFactory(cfg, db1, SkipBlockValidationOption())
-	require.NoError(t, err)
-
-	testLoadStoreHeight(statefactory, t)
-}
-
-func TestLoadStoreHeightInMem(t *testing.T) {
-	testTriePath, err := testutil.PathOfTempFile(_triePath)
-	require.NoError(t, err)
-	defer testutil.CleanupPath(testTriePath)
-
-	cfg := DefaultConfig
-	cfg.Chain.TrieDBPath = testTriePath
-	statefactory, err := NewFactory(cfg, db.NewMemKVStore(), SkipBlockValidationOption())
-	require.NoError(t, err)
-	testLoadStoreHeight(statefactory, t)
 }
 
 func TestSDBLoadStoreHeight(t *testing.T) {
@@ -901,7 +761,7 @@ func TestSDBLoadStoreHeightInMem(t *testing.T) {
 
 func testLoadStoreHeight(sf Factory, t *testing.T) {
 	require := require.New(t)
-	ctx := genesis.WithGenesisContext(context.Background(), genesis.Default)
+	ctx := genesis.WithGenesisContext(context.Background(), genesis.TestDefault())
 	require.NoError(sf.Start(ctx))
 	defer func() {
 		require.NoError(sf.Stop(ctx))
@@ -916,6 +776,7 @@ func testLoadStoreHeight(sf Factory, t *testing.T) {
 			Producer:    identityset.Address(27),
 			GasLimit:    testutil.TestGasLimit,
 		})
+		ctx = protocol.WithFeatureCtx(ctx)
 		blk, err := block.NewTestingBuilder().
 			SetHeight(i).
 			SetPrevBlockHash(lastBlockHash).
@@ -929,34 +790,6 @@ func testLoadStoreHeight(sf Factory, t *testing.T) {
 		require.NoError(err)
 		require.Equal(uint64(i), height)
 	}
-}
-
-func TestRunActions(t *testing.T) {
-	require := require.New(t)
-	testTriePath, err := testutil.PathOfTempFile(_triePath)
-	require.NoError(err)
-
-	cfg := DefaultConfig
-	db1, err := db.CreateKVStore(db.DefaultConfig, testTriePath)
-	require.NoError(err)
-	cfg.Genesis.InitBalanceMap[identityset.Address(28).String()] = "100"
-	cfg.Genesis.InitBalanceMap[identityset.Address(29).String()] = "200"
-	registry := protocol.NewRegistry()
-	sf, err := NewFactory(cfg, db1, RegistryOption(registry), SkipBlockValidationOption())
-	require.NoError(err)
-
-	acc := account.NewProtocol(rewarding.DepositGas)
-	require.NoError(acc.Register(registry))
-	ctx := protocol.WithBlockCtx(
-		genesis.WithGenesisContext(context.Background(), cfg.Genesis),
-		protocol.BlockCtx{},
-	)
-	require.NoError(sf.Start(ctx))
-	defer func() {
-		require.NoError(sf.Stop(ctx))
-		testutil.CleanupPath(testTriePath)
-	}()
-	testCommit(sf, t)
 }
 
 func TestSTXRunActions(t *testing.T) {
@@ -997,15 +830,13 @@ func testCommit(factory Factory, t *testing.T) {
 	b := identityset.Address(29).String()
 	priKeyB := identityset.PrivateKey(29)
 
-	tx1, err := action.NewTransfer(uint64(1), big.NewInt(10), b, nil, uint64(100000), big.NewInt(0))
-	require.NoError(err)
+	tx1 := action.NewTransfer(big.NewInt(10), b, nil)
 	bd := &action.EnvelopeBuilder{}
 	elp := bd.SetNonce(1).SetAction(tx1).Build()
 	selp1, err := action.Sign(elp, priKeyA)
 	require.NoError(err)
 
-	tx2, err := action.NewTransfer(uint64(1), big.NewInt(20), a, nil, uint64(100000), big.NewInt(0))
-	require.NoError(err)
+	tx2 := action.NewTransfer(big.NewInt(20), a, nil)
 	bd = &action.EnvelopeBuilder{}
 	elp = bd.SetNonce(1).SetAction(tx2).Build()
 	selp2, err := action.Sign(elp, priKeyB)
@@ -1030,9 +861,9 @@ func testCommit(factory Factory, t *testing.T) {
 					Hash:   blkHash,
 				},
 			}),
-		genesis.Default,
+		genesis.TestDefault(),
 	)
-
+	ctx = protocol.WithFeatureCtx(ctx)
 	blk, err := block.NewTestingBuilder().
 		SetHeight(1).
 		SetPrevBlockHash(blkHash).
@@ -1042,34 +873,6 @@ func testCommit(factory Factory, t *testing.T) {
 	require.NoError(err)
 
 	require.NoError(factory.PutBlock(ctx, &blk))
-}
-
-func TestPickAndRunActions(t *testing.T) {
-	require := require.New(t)
-	testTriePath, err := testutil.PathOfTempFile(_triePath)
-	require.NoError(err)
-
-	cfg := DefaultConfig
-	db1, err := db.CreateKVStore(db.DefaultConfig, testTriePath)
-	require.NoError(err)
-	cfg.Genesis.InitBalanceMap[identityset.Address(28).String()] = "100"
-	cfg.Genesis.InitBalanceMap[identityset.Address(29).String()] = "200"
-	registry := protocol.NewRegistry()
-	sf, err := NewFactory(cfg, db1, RegistryOption(registry))
-	require.NoError(err)
-
-	acc := account.NewProtocol(rewarding.DepositGas)
-	require.NoError(acc.Register(registry))
-	ctx := protocol.WithBlockCtx(
-		genesis.WithGenesisContext(context.Background(), cfg.Genesis),
-		protocol.BlockCtx{},
-	)
-	require.NoError(sf.Start(ctx))
-	defer func() {
-		require.NoError(sf.Stop(ctx))
-		testutil.CleanupPath(testTriePath)
-	}()
-	testNewBlockBuilder(sf, t)
 }
 
 func TestSTXPickAndRunActions(t *testing.T) {
@@ -1109,8 +912,7 @@ func testNewBlockBuilder(factory Factory, t *testing.T) {
 	priKeyB := identityset.PrivateKey(29)
 
 	accMap := make(map[string][]*action.SealedEnvelope)
-	tx1, err := action.NewTransfer(uint64(1), big.NewInt(10), b, nil, uint64(100000), big.NewInt(0))
-	require.NoError(err)
+	tx1 := action.NewTransfer(big.NewInt(10), b, nil)
 	bd := &action.EnvelopeBuilder{}
 	elp := bd.SetNonce(1).SetAction(tx1).Build()
 	selp1, err := action.Sign(elp, priKeyA)
@@ -1122,8 +924,7 @@ func testNewBlockBuilder(factory Factory, t *testing.T) {
 	require.NoError(err)
 	accMap[identityset.Address(0).String()] = []*action.SealedEnvelope{tsf0}
 
-	tx2, err := action.NewTransfer(uint64(1), big.NewInt(20), a, nil, uint64(100000), big.NewInt(0))
-	require.NoError(err)
+	tx2 := action.NewTransfer(big.NewInt(20), a, nil)
 	bd = &action.EnvelopeBuilder{}
 	elp = bd.SetNonce(1).SetAction(tx2).Build()
 	selp2, err := action.Sign(elp, priKeyB)
@@ -1140,47 +941,13 @@ func testNewBlockBuilder(factory Factory, t *testing.T) {
 			GasLimit:    gasLimit,
 		})
 	ctx = protocol.WithBlockchainCtx(
-		genesis.WithGenesisContext(ctx, genesis.Default),
+		genesis.WithGenesisContext(ctx, genesis.TestDefault()),
 		protocol.BlockchainCtx{},
 	)
 	ctx = protocol.WithFeatureCtx(protocol.WithFeatureWithHeightCtx(ctx))
-	blkBuilder, err := factory.NewBlockBuilder(ctx, ap, nil)
+	blk, err := factory.Mint(ctx, ap, identityset.PrivateKey(27))
 	require.NoError(err)
-	require.NotNil(blkBuilder)
-	blk, err := blkBuilder.SignAndBuild(identityset.PrivateKey(27))
-	require.NoError(err)
-	require.NoError(factory.PutBlock(ctx, &blk))
-}
-
-func TestSimulateExecution(t *testing.T) {
-	require := require.New(t)
-	testTriePath, err := testutil.PathOfTempFile(_triePath)
-	require.NoError(err)
-
-	cfg := DefaultConfig
-	db1, err := db.CreateKVStore(db.DefaultConfig, testTriePath)
-	require.NoError(err)
-	cfg.Genesis.InitBalanceMap[identityset.Address(28).String()] = "100"
-	cfg.Genesis.InitBalanceMap[identityset.Address(29).String()] = "200"
-	registry := protocol.NewRegistry()
-	sf, err := NewFactory(cfg, db1, RegistryOption(registry))
-	require.NoError(err)
-
-	acc := account.NewProtocol(rewarding.DepositGas)
-	require.NoError(acc.Register(registry))
-	ctx := protocol.WithBlockchainCtx(
-		protocol.WithBlockCtx(
-			genesis.WithGenesisContext(context.Background(), cfg.Genesis),
-			protocol.BlockCtx{},
-		),
-		protocol.BlockchainCtx{},
-	)
-	require.NoError(sf.Start(ctx))
-	defer func() {
-		require.NoError(sf.Stop(ctx))
-		testutil.CleanupPath(testTriePath)
-	}()
-	testSimulateExecution(ctx, sf, t)
+	require.NoError(factory.PutBlock(ctx, blk))
 }
 
 func TestSTXSimulateExecution(t *testing.T) {
@@ -1219,8 +986,8 @@ func testSimulateExecution(ctx context.Context, sf Factory, t *testing.T) {
 	require := require.New(t)
 
 	data, _ := hex.DecodeString("608060405234801561001057600080fd5b5060df8061001f6000396000f3006080604052600436106049576000357c0100000000000000000000000000000000000000000000000000000000900463ffffffff16806360fe47b114604e5780636d4ce63c146078575b600080fd5b348015605957600080fd5b5060766004803603810190808035906020019092919050505060a0565b005b348015608357600080fd5b50608a60aa565b6040518082815260200191505060405180910390f35b8060008190555050565b600080549050905600a165627a7a7230582002faabbefbbda99b20217cf33cb8ab8100caf1542bf1f48117d72e2c59139aea0029")
-	ex, err := action.NewExecution(action.EmptyAddress, 1, big.NewInt(0), uint64(100000), big.NewInt(0), data)
-	require.NoError(err)
+	ex := action.NewExecution(action.EmptyAddress, big.NewInt(0), data)
+	elp := (&action.EnvelopeBuilder{}).SetGasLimit(100000).SetAction(ex).Build()
 	addr, err := address.FromString(address.ZeroAddress)
 	require.NoError(err)
 
@@ -1231,22 +998,12 @@ func testSimulateExecution(ctx context.Context, sf Factory, t *testing.T) {
 		GetBlockTime: func(u uint64) (time.Time, error) {
 			return time.Time{}, nil
 		},
+		DepositGasFunc: rewarding.DepositGas,
 	})
-	_, _, err = sf.SimulateExecution(ctx, addr, ex)
+	ws, err := sf.WorkingSet(ctx)
 	require.NoError(err)
-}
-
-func TestCachedBatch(t *testing.T) {
-	sf, err := NewFactory(DefaultConfig, db.NewMemKVStore())
-	require.NoError(t, err)
-	ctx := genesis.WithGenesisContext(
-		protocol.WithRegistry(context.Background(), protocol.NewRegistry()),
-		genesis.Default,
-	)
-	require.NoError(t, sf.Start(ctx))
-	ws, err := sf.(workingSetCreator).newWorkingSet(ctx, 1)
-	require.NoError(t, err)
-	testCachedBatch(ws, t)
+	_, _, err = evm.SimulateExecution(ctx, ws, addr, elp)
+	require.NoError(err)
 }
 
 func TestSTXCachedBatch(t *testing.T) {
@@ -1254,7 +1011,7 @@ func TestSTXCachedBatch(t *testing.T) {
 	require.NoError(t, err)
 	ctx := genesis.WithGenesisContext(
 		protocol.WithRegistry(context.Background(), protocol.NewRegistry()),
-		genesis.Default,
+		genesis.TestDefault(),
 	)
 	require.NoError(t, sdb.Start(ctx))
 	ws, err := sdb.(workingSetCreator).newWorkingSet(ctx, 1)
@@ -1343,7 +1100,7 @@ func TestStateDBPatch(t *testing.T) {
 			GasLimit:    gasLimit,
 		},
 	)
-	ctx = genesis.WithGenesisContext(ctx, genesis.Default)
+	ctx = genesis.WithGenesisContext(ctx, genesis.TestDefault())
 
 	require.NoError(sdb.Start(ctx))
 	defer func() {
@@ -1359,6 +1116,7 @@ func TestStateDBPatch(t *testing.T) {
 		}), protocol.BlockchainCtx{
 		ChainID: 1,
 	})
+	ctx = protocol.WithFeatureCtx(ctx)
 	_, err = trieDB.Get(n1, ha1)
 	require.EqualError(errors.Cause(err), db.ErrNotExist.Error())
 	_, err = trieDB.Get(n1, ha2)
@@ -1433,15 +1191,8 @@ func TestDeleteAndPutSameKey(t *testing.T) {
 	}
 	ctx := genesis.WithGenesisContext(
 		protocol.WithRegistry(context.Background(), protocol.NewRegistry()),
-		genesis.Default,
+		genesis.TestDefault(),
 	)
-	t.Run("workingSet", func(t *testing.T) {
-		sf, err := NewFactory(DefaultConfig, db.NewMemKVStore())
-		require.NoError(t, err)
-		ws, err := sf.(workingSetCreator).newWorkingSet(ctx, 0)
-		require.NoError(t, err)
-		testDeleteAndPutSameKey(t, ws)
-	})
 	t.Run("stateTx", func(t *testing.T) {
 		sdb, err := NewStateDB(DefaultConfig, db.NewMemKVStore())
 		require.NoError(t, err)
@@ -1449,35 +1200,6 @@ func TestDeleteAndPutSameKey(t *testing.T) {
 		require.NoError(t, err)
 		testDeleteAndPutSameKey(t, ws)
 	})
-}
-
-func BenchmarkInMemRunAction(b *testing.B) {
-	cfg := DefaultConfig
-	sf, err := NewFactory(cfg, db.NewMemKVStore(), SkipBlockValidationOption())
-	if err != nil {
-		b.Fatal(err)
-	}
-	benchRunAction(sf, b)
-}
-
-func BenchmarkDBRunAction(b *testing.B) {
-	tp := filepath.Join(os.TempDir(), _triePath)
-	if fileutil.FileExists(tp) && os.RemoveAll(tp) != nil {
-		b.Error("Fail to remove testDB file")
-	}
-
-	cfg := DefaultConfig
-	db1, err := db.CreateKVStore(db.DefaultConfig, tp)
-	require.NoError(b, err)
-	sf, err := NewFactory(cfg, db1, SkipBlockValidationOption())
-	if err != nil {
-		b.Fatal(err)
-	}
-	benchRunAction(sf, b)
-
-	if fileutil.FileExists(tp) && os.RemoveAll(tp) != nil {
-		b.Error("Fail to remove testDB file")
-	}
 }
 
 func BenchmarkSDBInMemRunAction(b *testing.B) {
@@ -1546,7 +1268,7 @@ func benchRunAction(sf Factory, b *testing.B) {
 		identityset.PrivateKey(33).PublicKey(),
 	}
 	nonces := make([]uint64, len(accounts))
-	ge := genesis.Default
+	ge := genesis.TestDefault()
 	prevHash := ge.Hash()
 	for _, acc := range accounts {
 		ge.InitBalanceMap[acc] = big.NewInt(int64(b.N * 100)).String()
@@ -1585,10 +1307,7 @@ func benchRunAction(sf Factory, b *testing.B) {
 			}
 			receiver := receiverAddr.String()
 			nonces[senderIdx] += nonces[senderIdx]
-			tx, err := action.NewTransfer(nonces[senderIdx], big.NewInt(1), receiver, nil, uint64(0), big.NewInt(0))
-			if err != nil {
-				b.Fatal(err)
-			}
+			tx := action.NewTransfer(big.NewInt(1), receiver, nil)
 			bd := &action.EnvelopeBuilder{}
 			elp := bd.SetNonce(nonces[senderIdx]).SetAction(tx).Build()
 			selp := action.FakeSeal(elp, pubKeys[senderIdx])
@@ -1601,7 +1320,7 @@ func benchRunAction(sf Factory, b *testing.B) {
 				Producer:    identityset.Address(27),
 				GasLimit:    gasLimit,
 			})
-		zctx = genesis.WithGenesisContext(zctx, genesis.Default)
+		zctx = genesis.WithGenesisContext(zctx, genesis.TestDefault())
 
 		blk, err := block.NewTestingBuilder().
 			SetHeight(uint64(n)).
@@ -1678,7 +1397,7 @@ func benchState(sf Factory, b *testing.B) {
 		identityset.PrivateKey(33).PublicKey(),
 	}
 	nonces := make([]uint64, len(accounts))
-	ge := genesis.Default
+	ge := genesis.TestDefault()
 	prevHash := ge.Hash()
 	for _, acc := range accounts {
 		ge.InitBalanceMap[acc] = big.NewInt(int64(1000)).String()
@@ -1714,10 +1433,7 @@ func benchState(sf Factory, b *testing.B) {
 		}
 		receiver := receiverAddr.String()
 		nonces[senderIdx] += nonces[senderIdx]
-		tx, err := action.NewTransfer(nonces[senderIdx], big.NewInt(1), receiver, nil, uint64(0), big.NewInt(0))
-		if err != nil {
-			b.Fatal(err)
-		}
+		tx := action.NewTransfer(big.NewInt(1), receiver, nil)
 		bd := &action.EnvelopeBuilder{}
 		elp := bd.SetNonce(nonces[senderIdx]).SetAction(tx).Build()
 		selp := action.FakeSeal(elp, pubKeys[senderIdx])
@@ -1729,7 +1445,7 @@ func benchState(sf Factory, b *testing.B) {
 			Producer:    identityset.Address(27),
 			GasLimit:    gasLimit,
 		})
-	zctx = genesis.WithGenesisContext(zctx, genesis.Default)
+	zctx = genesis.WithGenesisContext(zctx, genesis.TestDefault())
 
 	blk, err := block.NewTestingBuilder().
 		SetHeight(uint64(1)).

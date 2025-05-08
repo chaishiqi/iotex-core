@@ -11,15 +11,15 @@ import (
 	"os"
 	"path/filepath"
 
+	hdwallet "github.com/ethereum-optimism/go-ethereum-hdwallet"
 	ecrypt "github.com/ethereum/go-ethereum/crypto"
-	hdwallet "github.com/miguelmota/go-ethereum-hdwallet"
 	"github.com/spf13/cobra"
 
 	"github.com/iotexproject/go-pkgs/crypto"
-	"github.com/iotexproject/iotex-core/ioctl/config"
-	"github.com/iotexproject/iotex-core/ioctl/output"
-	"github.com/iotexproject/iotex-core/ioctl/util"
-	"github.com/iotexproject/iotex-core/pkg/util/fileutil"
+	"github.com/iotexproject/iotex-core/v2/ioctl/config"
+	"github.com/iotexproject/iotex-core/v2/ioctl/output"
+	"github.com/iotexproject/iotex-core/v2/ioctl/util"
+	"github.com/iotexproject/iotex-core/v2/pkg/util/fileutil"
 )
 
 // Multi-language support

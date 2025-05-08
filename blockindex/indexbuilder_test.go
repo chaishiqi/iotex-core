@@ -10,16 +10,16 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/blockchain"
-	"github.com/iotexproject/iotex-core/blockchain/block"
-	"github.com/iotexproject/iotex-core/blockchain/blockdao"
-	"github.com/iotexproject/iotex-core/blockchain/filedao"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/db"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/testutil"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/blockchain"
+	"github.com/iotexproject/iotex-core/v2/blockchain/block"
+	"github.com/iotexproject/iotex-core/v2/blockchain/blockdao"
+	"github.com/iotexproject/iotex-core/v2/blockchain/filedao"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/db"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/testutil"
 )
 
 func TestIndexBuilder(t *testing.T) {
@@ -61,9 +61,10 @@ func TestIndexBuilder(t *testing.T) {
 		},
 	}
 
-	testIndexer := func(dao blockdao.BlockDAO, indexer Indexer, t *testing.T) {
+	testIndexer := func(dao blockdao.BlockStore, indexer Indexer, t *testing.T) {
+		g := genesis.TestDefault()
 		ctx := protocol.WithBlockchainCtx(
-			genesis.WithGenesisContext(context.Background(), genesis.Default),
+			genesis.WithGenesisContext(context.Background(), g),
 			protocol.BlockchainCtx{
 				ChainID: blockchain.DefaultConfig.ID,
 			})
@@ -72,7 +73,7 @@ func TestIndexBuilder(t *testing.T) {
 		ib := &IndexBuilder{
 			dao:     dao,
 			indexer: indexer,
-			genesis: genesis.Default,
+			genesis: g,
 		}
 		defer func() {
 			require.NoError(ib.Stop(ctx))
@@ -167,7 +168,7 @@ func TestIndexBuilder(t *testing.T) {
 	memstore, err := filedao.NewFileDAOInMemForTest()
 	require.NoError(err)
 	for _, v := range []struct {
-		dao   blockdao.BlockDAO
+		dao   blockdao.BlockStore
 		inMem bool
 	}{
 		{

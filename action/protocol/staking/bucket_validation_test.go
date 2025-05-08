@@ -9,10 +9,10 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/iotexproject/iotex-core/action/protocol"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/test/identityset"
-	"github.com/iotexproject/iotex-core/testutil/testdb"
+	"github.com/iotexproject/iotex-core/v2/action/protocol"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/test/identityset"
+	"github.com/iotexproject/iotex-core/v2/testutil/testdb"
 )
 
 func TestValidateBucket(t *testing.T) {
@@ -23,7 +23,7 @@ func TestValidateBucket(t *testing.T) {
 		v, _, err := CreateBaseView(sm, false)
 		r.NoError(err)
 		sm.WriteView(_protocolID, v)
-		csm, err := NewCandidateStateManager(sm, false)
+		csm, err := NewCandidateStateManager(sm)
 		r.NoError(err)
 		esm := NewEndorsementStateManager(sm)
 		return csm, esm
@@ -87,7 +87,7 @@ func TestValidateBucket(t *testing.T) {
 				BlockHeight: 0,
 			},
 		)
-		ctx = protocol.WithFeatureCtx(genesis.WithGenesisContext(ctx, genesis.Default))
+		ctx = protocol.WithFeatureCtx(genesis.WithGenesisContext(ctx, genesis.TestDefault()))
 		featureCtx := protocol.MustGetFeatureCtx(ctx)
 		r.Nil(validateBucketSelfStake(featureCtx, csm, bkt, false))
 		r.ErrorContains(validateBucketSelfStake(featureCtx, csm, bkt, true), "bucket is not self staking")
@@ -112,20 +112,22 @@ func TestValidateBucket(t *testing.T) {
 		bktIdx, err := csm.putBucketAndIndex(bkt)
 		r.NoError(err)
 		blkHeight := uint64(10)
+		ctx := protocol.WithBlockCtx(context.Background(), protocol.BlockCtx{BlockHeight: blkHeight})
+		ctx = protocol.WithFeatureCtx(genesis.WithGenesisContext(ctx, genesis.TestDefault()))
 		// not endorsed bucket
-		r.Nil(validateBucketWithoutEndorsement(esm, bkt, blkHeight))
-		r.ErrorContains(validateBucketWithEndorsement(esm, bkt, blkHeight), "bucket is not an endorse bucket")
+		r.Nil(validateBucketWithoutEndorsement(ctx, esm, bkt, blkHeight))
+		r.ErrorContains(validateBucketWithEndorsement(ctx, esm, bkt, blkHeight), "bucket is not an endorse bucket")
 		// endorsed bucket
 		r.NoError(esm.Put(bktIdx, &Endorsement{ExpireHeight: endorsementNotExpireHeight}))
-		r.Nil(validateBucketWithEndorsement(esm, bkt, blkHeight))
-		r.ErrorContains(validateBucketWithoutEndorsement(esm, bkt, blkHeight), "bucket is still endorsed")
+		r.Nil(validateBucketWithEndorsement(ctx, esm, bkt, blkHeight))
+		r.ErrorContains(validateBucketWithoutEndorsement(ctx, esm, bkt, blkHeight), "bucket is still endorsed")
 		// unendorsing bucket
 		r.NoError(esm.Put(bktIdx, &Endorsement{ExpireHeight: blkHeight + 1}))
-		r.Nil(validateBucketWithEndorsement(esm, bkt, blkHeight))
-		r.ErrorContains(validateBucketWithoutEndorsement(esm, bkt, blkHeight), "bucket is still endorsed")
+		r.Nil(validateBucketWithEndorsement(ctx, esm, bkt, blkHeight))
+		r.ErrorContains(validateBucketWithoutEndorsement(ctx, esm, bkt, blkHeight), "bucket is still endorsed")
 		// endorse expired bucket
 		r.NoError(esm.Put(bktIdx, &Endorsement{ExpireHeight: blkHeight}))
-		r.Nil(validateBucketWithoutEndorsement(esm, bkt, blkHeight))
-		r.ErrorContains(validateBucketWithEndorsement(esm, bkt, blkHeight), "bucket is not an endorse bucket")
+		r.Nil(validateBucketWithoutEndorsement(ctx, esm, bkt, blkHeight))
+		r.ErrorContains(validateBucketWithEndorsement(ctx, esm, bkt, blkHeight), "bucket is not an endorse bucket")
 	})
 }

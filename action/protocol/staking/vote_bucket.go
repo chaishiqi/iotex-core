@@ -16,10 +16,10 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/iotexproject/iotex-core/action"
-	"github.com/iotexproject/iotex-core/action/protocol/staking/stakingpb"
-	"github.com/iotexproject/iotex-core/blockchain/genesis"
-	"github.com/iotexproject/iotex-core/pkg/util/byteutil"
+	"github.com/iotexproject/iotex-core/v2/action"
+	"github.com/iotexproject/iotex-core/v2/action/protocol/staking/stakingpb"
+	"github.com/iotexproject/iotex-core/v2/blockchain/genesis"
+	"github.com/iotexproject/iotex-core/v2/pkg/util/byteutil"
 )
 
 const (
@@ -44,6 +44,7 @@ type (
 		CreateBlockHeight         uint64
 		StakeStartBlockHeight     uint64
 		UnstakeStartBlockHeight   uint64
+		Timestamped               bool
 	}
 
 	// totalBucketCount stores the total bucket count
@@ -186,7 +187,7 @@ func (vb *VoteBucket) Serialize() ([]byte, error) {
 }
 
 func (vb *VoteBucket) isUnstaked() bool {
-	if vb.isNative() {
+	if vb.isNative() || vb.Timestamped {
 		return vb.UnstakeStartTime.After(vb.StakeStartTime)
 	}
 	return vb.UnstakeStartBlockHeight < maxBlockNumber

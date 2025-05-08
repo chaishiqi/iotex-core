@@ -17,8 +17,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/spf13/cobra"
 
-	"github.com/iotexproject/iotex-core/ioctl/config"
-	"github.com/iotexproject/iotex-core/ioctl/output"
+	"github.com/iotexproject/iotex-core/v2/ioctl/config"
+	"github.com/iotexproject/iotex-core/v2/ioctl/output"
 )
 
 var (
@@ -102,7 +102,7 @@ func isReadOnly(path string) bool {
 		readOnly = true
 	}
 	if err = file.Close(); err != nil {
-		log.Printf("fialed to close file: %v", err)
+		log.Printf("failed to close file: %v", err)
 	}
 	return readOnly
 }
